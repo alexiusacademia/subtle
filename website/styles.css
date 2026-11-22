@@ -1,0 +1,134 @@
+/* Subtle's website: the icon's indigo and caption yellow, light and dark.
+   Author: Alexius Academia. Date: 2026-11-23 */
+:root {
+  --bg: #ffffff;
+  --bg-band: #f4f4fb;
+  --ink: #17153a;
+  --ink-soft: #4b4970;
+  --line: #e1e0f0;
+  --brand: #4f46e5;
+  --brand-ink: #ffffff;
+  --accent: #ffd23f;
+  --card: #ffffff;
+  --code: #ecebf7;
+  --hero-from: #231e6b;
+  --hero-to: #4f46e5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f0e24;
+    --bg-band: #16143a;
+    --ink: #ecebff;
+    --ink-soft: #aeacd6;
+    --line: #2b2860;
+    --brand: #7b74ff;
+    --brand-ink: #0f0e24;
+    --card: #1a1842;
+    --code: #24215a;
+    --hero-from: #0f0e24;
+    --hero-to: #2b2491;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+a { color: var(--brand); }
+code, kbd {
+  font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code);
+  padding: 0.1em 0.4em;
+  border-radius: 5px;
+}
+kbd { border: 1px solid var(--line); border-bottom-width: 2px; white-space: nowrap; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+
+.top {
+  position: sticky; top: 0; z-index: 10;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.bar { display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 16px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 19px; color: var(--ink); text-decoration: none; }
+nav { display: flex; align-items: center; gap: 20px; font-size: 15px; }
+nav a { color: var(--ink-soft); text-decoration: none; }
+nav a:hover { color: var(--ink); }
+nav .pill { background: var(--brand); color: var(--brand-ink); padding: 6px 14px; border-radius: 999px; font-weight: 600; }
+@media (max-width: 720px) { nav a:not(.pill) { display: none; } }
+
+.hero {
+  background: linear-gradient(170deg, var(--hero-from), var(--hero-to) 75%, var(--bg) 75.1%);
+  color: #fff;
+  padding: 72px 0 24px;
+  text-align: center;
+}
+.eyebrow { color: var(--accent); font-weight: 600; letter-spacing: 0.02em; margin: 0 0 12px; }
+.hero h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.08; margin: 0 0 18px; letter-spacing: -0.02em; }
+.lede { max-width: 720px; margin: 0 auto 28px; font-size: 19px; color: #dcdbff; }
+.hero-get { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; flex-direction: column; align-items: center;
+  padding: 12px 22px; border-radius: 12px; font-weight: 600; text-decoration: none;
+  background: rgba(255, 255, 255, 0.12); color: inherit; border: 1px solid rgba(255, 255, 255, 0.28);
+}
+.btn small { font-weight: 400; opacity: 0.8; font-size: 13px; }
+.btn.primary { background: var(--accent); color: #17153a; border-color: var(--accent); }
+.open .btn { color: var(--brand); border-color: var(--brand); background: transparent; }
+.fine { font-size: 14px; color: #c7c5f5; margin: 14px 0 32px; }
+.shot { margin: 0; }
+.shot img {
+  width: 100%; height: auto; display: block;
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(10, 8, 40, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.hero .shot { max-width: 1040px; margin: 0 auto; }
+
+section { padding: 72px 0; }
+.band { background: var(--bg-band); }
+h2 { font-size: clamp(26px, 3.4vw, 36px); line-height: 1.2; margin: 0 0 16px; letter-spacing: -0.01em; }
+h3 { margin: 0 0 6px; font-size: 18px; }
+.sub { color: var(--ink-soft); margin: -6px 0 28px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-top: 28px; }
+.grid article { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+.grid article h3::before { content: ""; display: block; width: 28px; height: 6px; border-radius: 3px; background: var(--accent); margin-bottom: 12px; }
+.grid p { margin: 0; color: var(--ink-soft); }
+
+.row { display: grid; grid-template-columns: 5fr 7fr; gap: 40px; align-items: center; }
+.row + .row { margin-top: 64px; }
+.row.flip .text { order: 2; }
+.text p { color: var(--ink-soft); }
+@media (max-width: 860px) { .row { grid-template-columns: 1fr; } .row.flip .text { order: 0; } }
+
+.keys table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.keys td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.keys td:nth-child(odd) { white-space: nowrap; width: 1%; }
+@media (max-width: 720px) {
+  .keys tr { display: grid; grid-template-columns: auto 1fr; }
+  .keys td:nth-child(odd) { width: auto; }
+}
+
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
+.two ul { padding-left: 20px; color: var(--ink-soft); }
+@media (max-width: 860px) { .two { grid-template-columns: 1fr; } }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.card { display: flex; flex-direction: column; gap: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+.card .meta { color: var(--ink-soft); font-size: 14px; }
+.card .get { background: var(--brand); color: var(--brand-ink); text-align: center; padding: 10px; border-radius: 10px; font-weight: 600; text-decoration: none; margin-top: 6px; }
+.card .sum { font: 11px ui-monospace, Menlo, monospace; color: var(--ink-soft); word-break: break-all; }
+.card a:not(.get) { font-size: 14px; }
+.card .soon { color: var(--ink-soft); font-style: italic; }
+.callout { margin: 28px 0; padding: 18px 22px; border-radius: 14px; background: var(--bg-band); border: 1px solid var(--line); }
+.callout p { margin: 6px 0; color: var(--ink-soft); }
+.reqs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; }
+.reqs ul { padding-left: 20px; color: var(--ink-soft); font-size: 15px; }
+
+footer { border-top: 1px solid var(--line); padding: 28px 0; font-size: 14px; color: var(--ink-soft); }
+.foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.credit { margin: 12px auto 0; font-size: 12px; }

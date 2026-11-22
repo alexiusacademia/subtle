@@ -1,0 +1,852 @@
+// Subtle: an SRT subtitle editor. The window: a table of the cues (number,
+// start, end, duration, text; the times and text edited in place with a
+// double-click), and beside it an editor for the selected cue. "Adjust
+// Timing…" retimes all the cues, the selected ones, or those from the
+// selection on: by shifting them, by syncing two cues to the times they
+// should have, or by converting between frame rates (see timing.tsl).
+//
+// Every change can be undone (Cmd+Z when no text field is being edited).
+//
+// The video preview (video.tsl, playing with Reel's decoders) sits above
+// the cue editor: it shows the cues over the picture, seeks to the cue
+// selected, and gives the times for "Set Start/End to Video Time". A video
+// beside the SRT with the same name opens with it.
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+let undoLimit = 200
+let videoExtensions = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "m2ts", "mts", "mpg", "mpeg", "vob", "ogv", "wmv", "asf"]
+
+app Subtle(title: "Subtle", width: 1040, height: 680, documentTypes: ["srt"]) {
+    state cues: [Cue] = []
+    state path = ""
+    state newline = "\n"
+    state dirty = false
+    state selection: [Int] = []
+    state undoStack: [[Cue]] = []
+    state redoStack: [[Cue]] = []
+    state warnings: [String] = []
+    state showAdjust = false
+    state showWarnings = false
+    state splitSize = 600.0
+    state videoSize = 300.0
+    state videoRequests: [VideoRequest] = []
+    state video = VideoInfo()
+    state showSplit = false
+    state showSpell = false
+    state showWhisper = false
+    state sp = loadSpeller()
+    state spellOK = spellingAvailable()
+
+    VStack(spacing: 0) {
+        HStack(spacing: 4) {
+            ToolButton(icon: .folderOpen, label: "Open") { openDocument() }
+            ToolButton(icon: .save, label: "Save") { save() }
+            Divider().frame(height: 20)
+            ToolButton(icon: .plus, label: "Add Cue") { addCue() }
+            ToolButton(icon: .trash, label: "Delete") { deleteSelected() }
+                .disabled(selection.isEmpty)
+            Divider().frame(height: 20)
+            ToolButton(icon: .clock, label: "Adjust Timing…") { showAdjust = true }
+                .disabled(cues.isEmpty)
+            Spacer()
+            if !warnings.isEmpty {
+                ToolButton(icon: .warning, label: "{warnings.count} warnings") { showWarnings = true }
+            }
+        }
+        .padding(8)
+        Divider()
+
+        HSplit(size: splitSize) {
+            if cues.isEmpty {
+                EmptyState(onOpen: { openDocument() }, onNew: { addCue() })
+                    .frame(minWidth: 420)
+            } else {
+                CueTable(cues: cues, selection: selection, now: video.clock, onBeforeEdit: { remember() }, onEdited: { touch() })
+                    .frame(minWidth: 420)
+            }
+            VSplit(size: videoSize) {
+                VideoPane(cues: cues, focus: focusTime(), requests: videoRequests, info: video)
+                    .frame(minHeight: 160)
+                if selection.count == 1 && selection[0] < cues.count {
+                    CueEditor(cue: cues[selection[0]], number: selection[0] + 1, problem: cueProblem(cues, selection[0]),
+                              misspelled: if spellOK { misspelledWords(sp, cues[selection[0]].text) } else { [] },
+                              onBeforeEdit: { remember() }, onBeforeTyping: { old in rememberCue(selection[0], old) }, onEdited: { touch() },
+                              onPrevious: { select(selection[0] - 1) }, onNext: { select(selection[0] + 1) })
+                        .id("{selection[0]}:{cues[selection[0]].start}:{cues[selection[0]].end}")
+                        .frame(minWidth: 260)
+                } else {
+                    VStack {
+                        Text(if selection.isEmpty { "Select a cue to edit it" } else { "{selection.count} cues selected" })
+                            .color(.secondary)
+                    }
+                    .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(minWidth: 300)
+        }
+    }
+    .statusBar {
+        Icon(if dirty { IconName.pencil } else { IconName.circleCheck })
+        Text(if path.isEmpty { "Untitled" } else { path.fileName })
+        if dirty {
+            Text("Edited")
+        }
+        Spacer()
+        if video.loaded {
+            Icon(.image)
+            Text(video.path.fileName)
+        }
+        Text("{cues.count} cues")
+        if !cues.isEmpty {
+            Text("{formatTime(cues[0].start)} – {formatTime(cues[cues.count - 1].end)}")
+        }
+    }
+    .menuBar {
+        Menu("File") {
+            MenuItem("New", shortcut: "cmd+n") { newDocument() }
+            MenuItem("Open…", shortcut: "cmd+o") { openDocument() }
+            MenuItem("Open Video…", shortcut: "cmd+shift+o") { chooseVideo() }
+            MenuItem("Close Video") { videoRequests.append(.close) }
+                .disabled(!video.loaded)
+            MenuDivider()
+            MenuItem("Save", shortcut: "cmd+s") { save() }
+            MenuItem("Save As…", shortcut: "cmd+shift+s") { saveAs() }
+                .disabled(cues.isEmpty)
+        }
+        Menu("Edit") {
+            MenuItem("Undo", shortcut: "cmd+z") { undo() }
+                .disabled(undoStack.isEmpty)
+            MenuItem("Redo", shortcut: "cmd+shift+z") { redo() }
+                .disabled(redoStack.isEmpty)
+            MenuDivider()
+            MenuItem("Add Cue", shortcut: "cmd+enter") { addCue() }
+            MenuItem("Delete Cues", shortcut: "cmd+backspace") { deleteSelected() }
+                .disabled(selection.isEmpty)
+            MenuItem("Split Cue…", shortcut: "cmd+k") { showSplit = true }
+                .disabled(selection.count != 1)
+            MenuItem("Split Cue at Video Time", shortcut: "cmd+shift+k") { splitAtVideo() }
+                .disabled(!video.loaded || selection.count != 1)
+            MenuItem("Merge Selected Cues", shortcut: "cmd+m") { mergeSelected() }
+                .disabled(selection.count < 2)
+            MenuDivider()
+            MenuItem("Spell Check…", shortcut: "cmd+;") {
+                if spellOK {
+                    showSpell = true
+                } else {
+                    alert("Spell checking isn't available", message: spellingMissingNote())
+                }
+            }
+                .disabled(cues.isEmpty)
+            MenuItem("Sort by Start Time") { sortByTime() }
+                .disabled(cues.count < 2)
+        }
+        Menu("Video") {
+            MenuItem(if video.playing { "Pause" } else { "Play" }, shortcut: "space") { videoRequests.append(.toggle) }
+                .disabled(!video.loaded)
+            MenuItem("Back 2 Seconds", shortcut: "j") { videoRequests.append(.jump(ms: -2000)) }
+                .disabled(!video.loaded)
+            MenuItem("Forward 2 Seconds", shortcut: "l") { videoRequests.append(.jump(ms: 2000)) }
+                .disabled(!video.loaded)
+            MenuItem("Back 1/2 Second", shortcut: "shift+j") { videoRequests.append(.jump(ms: -500)) }
+                .disabled(!video.loaded)
+            MenuItem("Forward 1/2 Second", shortcut: "shift+l") { videoRequests.append(.jump(ms: 500)) }
+                .disabled(!video.loaded)
+            MenuDivider()
+            MenuItem("Play Selected Cue", shortcut: "p") { playSelected() }
+                .disabled(!video.loaded || selection.count != 1)
+            MenuItem("Go to Cue at Video Time", shortcut: "g") { selectAtVideo() }
+                .disabled(!video.loaded || cues.isEmpty)
+            MenuDivider()
+            MenuItem("Set Start to Video Time", shortcut: "cmd+[") { setFromVideo(start: true) }
+                .disabled(!video.loaded || selection.count != 1)
+            MenuItem("Set End to Video Time", shortcut: "cmd+]") { setFromVideo(start: false) }
+                .disabled(!video.loaded || selection.count != 1)
+            MenuItem("Add Cue at Video Time", shortcut: "cmd+shift+enter") { addCueAtVideo() }
+                .disabled(!video.loaded)
+            MenuDivider()
+            MenuItem("Shift All So Selected Cue Starts Here") { shiftToVideo() }
+                .disabled(!video.loaded || selection.count != 1)
+            MenuDivider()
+            MenuItem("Generate Subtitles with Whisper…") { showWhisper = true }
+        }
+        Menu("Timing") {
+            MenuItem("Adjust Timing…", shortcut: "cmd+t") { showAdjust = true }
+                .disabled(cues.isEmpty)
+            MenuDivider()
+            MenuItem("Shift Selected 100 ms Earlier", shortcut: "alt+cmd+left") { nudge(-100) }
+                .disabled(selection.isEmpty)
+            MenuItem("Shift Selected 100 ms Later", shortcut: "alt+cmd+right") { nudge(100) }
+                .disabled(selection.isEmpty)
+            MenuItem("Shift Selected 1 s Earlier", shortcut: "alt+cmd+shift+left") { nudge(-1000) }
+                .disabled(selection.isEmpty)
+            MenuItem("Shift Selected 1 s Later", shortcut: "alt+cmd+shift+right") { nudge(1000) }
+                .disabled(selection.isEmpty)
+            MenuDivider()
+            MenuItem("Fix Overlaps") { fixOverlaps() }
+                .disabled(cues.count < 2)
+        }
+    }
+    .sheet(isPresented: showAdjust) {
+        AdjustTiming(cues: cues, selection: selection, onApply: { adjusted, what in
+            remember()
+            cues = adjusted
+            touch()
+            showNotice(what)
+        })
+    }
+    .sheet(isPresented: showSplit) {
+        if selection.count == 1 && selection[0] < cues.count {
+            SplitCueSheet(cue: cues[selection[0]], videoTime: if video.loaded { video.clock } else { -1 }, onSplit: { at, time in
+                splitSelected(at, time)
+            })
+        }
+    }
+    .sheet(isPresented: showSpell) {
+        SpellCheckSheet(cues: cues, sp: sp, startCue: if selection.isEmpty { 0 } else { selection[0] },
+                        onBeforeEdit: { remember() }, onEdited: { touch() },
+                        onAddWord: { line in
+                            if !line.isEmpty {
+                                appendFile(path: dictionaryPath(), text: line)
+                            }
+                        },
+                        onShow: { i in select(i) })
+    }
+    .sheet(isPresented: showWhisper) {
+        WhisperSheet(source: video.path, hasCues: !cues.isEmpty, onDone: { made in
+            remember()
+            cues = made
+            selection = []
+            touch()
+            showNotice("Made {made.count} cues")
+        })
+    }
+    .sheet(isPresented: showWarnings) {
+        VStack(spacing: 10, alignment: .leading) {
+            Text("Lines that weren't part of a cue").font(size: 15, weight: .semibold)
+            Text("They were left out, and won't be in the file when it's saved.").color(.secondary)
+            Scroll {
+                VStack(spacing: 4, alignment: .leading) {
+                    for w in warnings {
+                        Text(w).font(size: 12)
+                    }
+                }
+            }
+            .frame(height: 240)
+            HStack {
+                Spacer()
+                Button("OK") { dismiss() }
+            }
+        }
+        .frame(width: 460)
+    }
+    .onOpenFile { file in load(file) }
+    .onDrop { file in
+        let ext = file.lowercase()
+        if ext.hasSuffix(".srt") {
+            load(file)
+        } else if isVideoFile(file) {
+            videoRequests.append(.open(path: file))
+        }
+    }
+    .onCloseRequest {
+        if !dirty || confirm("Discard your unsaved changes?", message: "The changes to {displayName()} haven't been saved.", confirmLabel: "Discard") {
+            quit()
+        }
+    }
+
+    // ---- Documents ----
+
+    fn displayName() -> String {
+        if path.isEmpty { "Untitled" } else { path.fileName }
+    }
+
+    fn updateTitle() {
+        setWindowTitle(if dirty { "{displayName()} — Edited" } else { displayName() })
+    }
+
+    fn mayDiscard() -> Bool {
+        !dirty || confirm("Discard your unsaved changes?", message: "The changes to {displayName()} haven't been saved.", confirmLabel: "Discard")
+    }
+
+    fn newDocument() {
+        if !mayDiscard() {
+            return
+        }
+        cues = []
+        path = ""
+        newline = "\n"
+        warnings = []
+        resetHistory()
+    }
+
+    fn openDocument() {
+        if let file = openFile(title: "Open Subtitles", types: ["srt"]) {
+            load(file)
+        }
+    }
+
+    fn load(_ file: String) {
+        if !mayDiscard() {
+            return
+        }
+        if let text = readFile(file) {
+            let parsed = parseSrt(text)
+            cues = parsed.cues
+            newline = parsed.newline
+            warnings = parsed.warnings
+            path = file
+            resetHistory()
+            openVideoBeside(file)
+            if cues.isEmpty {
+                alert("No subtitles found", message: "{file.fileName} has no cues that could be read.", kind: .warning)
+            }
+        } else {
+            alert("Couldn't open {file.fileName}", message: "The file couldn't be read as UTF-8 text.", kind: .error)
+        }
+    }
+
+    fn save() {
+        if path.isEmpty {
+            saveAs()
+        } else {
+            writeTo(path)
+        }
+    }
+
+    fn saveAs() {
+        var suggested = if path.isEmpty { "Untitled.srt" } else { path.fileName }
+        if path.isEmpty && video.loaded {
+            // Named after the video, so players find it beside it.
+            let name = video.path.fileName
+            suggested = (if let dot = name.findLast(".") { name.substring(from: 0, to: dot) } else { name }) + ".srt"
+        }
+        if let file = saveFile(title: "Save Subtitles", name: suggested, types: ["srt"]) {
+            writeTo(file)
+        }
+    }
+
+    fn writeTo(_ file: String) {
+        if writeFile(path: file, text: formatSrt(cues, newline: newline)) {
+            path = file
+            dirty = false
+            updateTitle()
+            showNotice("Saved {file.fileName}")
+        } else {
+            alert("Couldn't save", message: "{file} couldn't be written.", kind: .error)
+        }
+    }
+
+    // ---- Video ----
+
+    fn chooseVideo() {
+        if let file = openFile(title: "Open Video", types: videoExtensions) {
+            videoRequests.append(.open(path: file))
+        }
+    }
+
+    // A video next to the subtitles with the same name ("film.mkv" for
+    // "film.srt" or "film.en.srt"), when none is open.
+    fn openVideoBeside(_ srt: String) {
+        if video.loaded {
+            return
+        }
+        var base = srt.substring(from: 0, to: srt.count - 4)
+        for attempt in 0..2 {
+            for ext in videoExtensions {
+                let candidate = base + "." + ext
+                if fileExists(candidate) {
+                    videoRequests.append(.open(path: candidate))
+                    return
+                }
+            }
+            // "film.en" → "film"
+            if let dot = base.findLast(".") {
+                if dot > base.findLast("/") ?? -1 {
+                    base = base.substring(from: 0, to: dot)
+                }
+            }
+        }
+    }
+
+    // The selected cue's start (the video seeks there), or -1.
+    fn focusTime() -> Int {
+        if selection.count == 1 && selection[0] < cues.count { cues[selection[0]].start } else { -1 }
+    }
+
+    fn playSelected() {
+        if selection.count == 1 && selection[0] < cues.count {
+            videoRequests.append(.seek(ms: cues[selection[0]].start))
+            if !video.playing {
+                videoRequests.append(.toggle)
+            }
+        }
+    }
+
+    // Selects the cue showing at the video's time, or the next one.
+    fn selectAtVideo() {
+        let t = video.clock
+        for (i, c) in cues.enumerated() {
+            if c.end > t {
+                selection = [i]
+                return
+            }
+        }
+        selection = [cues.count - 1]
+    }
+
+    fn setFromVideo(start: Bool) {
+        if selection.count != 1 || selection[0] >= cues.count {
+            return
+        }
+        let i = selection[0]
+        remember()
+        if start {
+            // Keep the duration when the new start passes the end.
+            let len = cues[i].end - cues[i].start
+            cues[i].start = video.clock
+            if cues[i].end <= cues[i].start {
+                cues[i].end = cues[i].start + max(len, 1000)
+            }
+        } else {
+            cues[i].end = video.clock
+        }
+        touch()
+    }
+
+    fn addCueAtVideo() {
+        remember()
+        let t = video.clock
+        var at = 0
+        while at < cues.count && cues[at].start <= t {
+            at += 1
+        }
+        var end = t + 2000
+        if at < cues.count && cues[at].start > t {
+            end = min(end, cues[at].start - 1)
+        }
+        cues.insert(Cue(start: t, end: end, text: "New subtitle"), at: at)
+        selection = [at]
+        touch()
+    }
+
+    // Shifts every cue so the selected one starts at the video's time: the
+    // quickest fix for subtitles that are off by a constant amount.
+    fn shiftToVideo() {
+        if selection.count != 1 || selection[0] >= cues.count {
+            return
+        }
+        let by = video.clock - cues[selection[0]].start
+        remember()
+        cues = shiftCues(cues, by: by, only: scopeIndices(.all, count: cues.count, selection: []))
+        touch()
+        showNotice("Shifted all cues by {formatOffset(by)}")
+    }
+
+    // ---- Undo ----
+
+    // Called before each change, with the cues as they were.
+    fn remember() {
+        undoStack.append(cues)
+        if undoStack.count > undoLimit {
+            undoStack.removeFirst()
+        }
+        redoStack = []
+    }
+
+    // Like remember, for a change already made to cue i, which was `old`.
+    fn rememberCue(_ i: Int, _ old: Cue) {
+        var before = cues
+        if i < before.count {
+            before[i] = old
+        }
+        undoStack.append(before)
+        if undoStack.count > undoLimit {
+            undoStack.removeFirst()
+        }
+        redoStack = []
+    }
+
+    // Called after each change.
+    fn touch() {
+        dirty = true
+        updateTitle()
+    }
+
+    fn resetHistory() {
+        undoStack = []
+        redoStack = []
+        selection = []
+        dirty = false
+        updateTitle()
+    }
+
+    fn undo() {
+        if let previous = undoStack.last {
+            redoStack.append(cues)
+            undoStack.removeLast()
+            cues = previous
+            keepSelectionInRange()
+            touch()
+        }
+    }
+
+    fn redo() {
+        if let next = redoStack.last {
+            undoStack.append(cues)
+            redoStack.removeLast()
+            cues = next
+            keepSelectionInRange()
+            touch()
+        }
+    }
+
+    fn keepSelectionInRange() {
+        selection = selection.filter { i in i < cues.count }
+    }
+
+    // ---- Editing ----
+
+    fn select(_ i: Int) {
+        if i >= 0 && i < cues.count {
+            selection = [i]
+        }
+    }
+
+    fn addCue() {
+        remember()
+        // After the selected cue (or at the end), starting a little after it.
+        var at = cues.count
+        if !selection.isEmpty {
+            at = selection.sorted()[selection.count - 1] + 1
+        }
+        var start = 0
+        if at > 0 {
+            start = cues[at - 1].end + 100
+        }
+        var end = start + 2000
+        if at < cues.count && cues[at].start > start {
+            end = min(end, cues[at].start - 1)
+        }
+        cues.insert(Cue(start: start, end: end, text: "New subtitle"), at: at)
+        selection = [at]
+        touch()
+    }
+
+    fn deleteSelected() {
+        if selection.isEmpty {
+            return
+        }
+        remember()
+        let gone = selection.sorted()
+        var i = gone.count - 1
+        while i >= 0 {
+            cues.remove(at: gone[i])
+            i -= 1
+        }
+        selection = if cues.isEmpty { [] } else { [min(gone[0], cues.count - 1)] }
+        touch()
+    }
+
+    fn mergeSelected() {
+        if selection.count < 2 {
+            return
+        }
+        remember()
+        let picked = selection.sorted()
+        var merged = cues[picked[0]]
+        var lines: [String] = []
+        for i in picked {
+            merged.start = min(merged.start, cues[i].start)
+            merged.end = max(merged.end, cues[i].end)
+            lines.append(cues[i].text)
+        }
+        merged.text = lines.joined(separator: "\n")
+        var i = picked.count - 1
+        while i >= 1 {
+            cues.remove(at: picked[i])
+            i -= 1
+        }
+        cues[picked[0]] = merged
+        selection = [picked[0]]
+        touch()
+    }
+
+    // Splits the selected cue after character `at` of its text, at `time`.
+    fn splitSelected(_ at: Int, _ time: Int) {
+        if selection.count != 1 || selection[0] >= cues.count {
+            return
+        }
+        let i = selection[0]
+        remember()
+        let (a, b) = splitCue(cues[i], at: at, time: time)
+        cues[i] = a
+        cues.insert(b, at: i + 1)
+        selection = [i + 1]
+        touch()
+    }
+
+    // At the video's time, with the text split where the sheet would
+    // start (the line break, or the middle).
+    fn splitAtVideo() {
+        if selection.count != 1 || selection[0] >= cues.count {
+            return
+        }
+        let c = cues[selection[0]]
+        if video.clock <= c.start || video.clock >= c.end {
+            showNotice("The video isn't inside this cue")
+            return
+        }
+        splitSelected(defaultSplitPoint(c.text), video.clock)
+    }
+
+    fn sortByTime() {
+        remember()
+        cues = sortedCues(cues)
+        selection = []
+        touch()
+    }
+
+    fn nudge(_ ms: Int) {
+        if selection.isEmpty {
+            return
+        }
+        remember()
+        cues = shiftCues(cues, by: ms, only: selection)
+        touch()
+    }
+
+    // Ends each cue a little before the next one starts, where they overlap.
+    fn fixOverlaps() {
+        var fixed = 0
+        var out = cues
+        for i in 0..(out.count - 1) {
+            if out[i + 1].start < out[i].end && out[i + 1].start > out[i].start {
+                out[i].end = out[i + 1].start - 1
+                fixed += 1
+            }
+        }
+        if fixed == 0 {
+            showNotice("No overlaps")
+            return
+        }
+        remember()
+        cues = out
+        touch()
+        showNotice("Fixed {fixed} overlaps")
+    }
+}
+
+// ---- Views ----
+
+view ToolButton(icon: IconName, label: String, action: fn()) {
+    HStack(spacing: 5) {
+        Icon(icon)
+        Text(label)
+    }
+    .padding(6)
+    .hoverBackground(.lightGray, radius: 6)
+    .onTap { action() }
+}
+
+view EmptyState(onOpen: fn(), onNew: fn()) {
+    VStack(spacing: 12) {
+        Icon(.fileText).font(size: 40).color(.secondary)
+        Text("Open an SRT file to edit it").font(size: 16, weight: .semibold)
+        Text("Or drop one on the window.").color(.secondary)
+        HStack(spacing: 8) {
+            Button("Open…") { onOpen() }
+            Button("Start a New File") { onNew() }
+        }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+}
+
+// The cue's text on one line, for the table: lines joined with " | ".
+fn oneLine(_ text: String) -> String {
+    text.replace("\n", with: " | ")
+}
+
+fn isVideoFile(_ path: String) -> Bool {
+    let lower = path.lowercase()
+    for ext in videoExtensions {
+        if lower.hasSuffix("." + ext) {
+            return true
+        }
+    }
+    false
+}
+
+// `now`: the video's time (ms); the cue showing then is marked with ▶.
+view CueTable(cues: bind [Cue], selection: bind [Int], now: Int, onBeforeEdit: fn(), onEdited: fn()) {
+    Table(rows: cues.count, selection: selection) {
+        TableColumn("#", width: 52, alignment: .trailing) { i in
+            if cues[i].start <= now && now < cues[i].end {
+                Text("▶ {i + 1}").color(.blue)
+            } else if cueProblem(cues, i).isEmpty {
+                Text("{i + 1}").color(.secondary)
+            } else {
+                Text("{i + 1}").color(.red).tooltip(cueProblem(cues, i))
+            }
+        }
+        TableColumn("Start", width: 104, onEdit: { i, text in
+            if let ms = parseTime(text) {
+                onBeforeEdit()
+                cues[i].start = ms
+                onEdited()
+            }
+        }) { i in
+            Text(formatTime(cues[i].start)).font(size: 12, family: "Menlo")
+        }
+        TableColumn("End", width: 104, onEdit: { i, text in
+            if let ms = parseTime(text) {
+                onBeforeEdit()
+                cues[i].end = ms
+                onEdited()
+            }
+        }) { i in
+            Text(formatTime(cues[i].end)).font(size: 12, family: "Menlo")
+        }
+        TableColumn("Duration", width: 72, alignment: .trailing) { i in
+            Text("{(Float(cues[i].end - cues[i].start) / 1000.0).formatted(decimals: 3)} s").color(.secondary)
+        }
+        TableColumn("Text", onEdit: { i, text in
+            onBeforeEdit()
+            cues[i].text = text.replace(" | ", with: "\n")
+            onEdited()
+        }) { i in
+            Text(oneLine(cues[i].text)).lineLimit(1)
+        }
+    }
+}
+
+// The selected cue: its times (typed, or moved with the small buttons) and
+// its text. Shown with `.id(index)`, so its fields start again for each cue.
+view CueEditor(cue: bind Cue, number: Int, problem: String, misspelled: [String], onBeforeEdit: fn(), onBeforeTyping: fn(Cue), onEdited: fn(), onPrevious: fn(), onNext: fn()) {
+    state startText = formatTime(cue.start)
+    state endText = formatTime(cue.end)
+    state durationText = (Float(cue.end - cue.start) / 1000.0).formatted(decimals: 3)
+    // Typing in the text field is one step of undo per cue visit: the cue
+    // as it was before the first key.
+    state typed = false
+    state beforeTyping = cue
+
+    VStack(spacing: 10, alignment: .leading) {
+        HStack {
+            Text("Cue {number}").font(size: 16, weight: .semibold)
+            Spacer()
+            Button("‹") { onPrevious() }.tooltip("Previous cue")
+            Button("›") { onNext() }.tooltip("Next cue")
+        }
+        if !problem.isEmpty {
+            HStack(spacing: 6) {
+                Icon(.warning).color(.red)
+                Text(problem).color(.red)
+            }
+        }
+        Grid(spacing: 8) {
+            GridRow {
+                Text("Start").gridColumnAlignment(.trailing)
+                TextField("00:00:00,000", text: startText).onSubmit { applyStart() }
+                TimeNudge(onNudge: { ms in moveStart(ms) })
+            }
+            GridRow {
+                Text("End").gridColumnAlignment(.trailing)
+                TextField("00:00:00,000", text: endText).onSubmit { applyEnd() }
+                TimeNudge(onNudge: { ms in moveEnd(ms) })
+            }
+            GridRow {
+                Text("Duration").gridColumnAlignment(.trailing)
+                TextField("seconds", text: durationText).onSubmit { applyDuration() }
+                Text("s").color(.secondary)
+            }
+        }
+        Text("Press Enter in a time field to apply it.").font(size: 11).color(.secondary)
+        Text("Text").font(size: 13, weight: .semibold)
+        TextField("Subtitle text", text: cue.text, lines: 8) {
+            if !typed {
+                typed = true
+                onBeforeTyping(beforeTyping)
+            }
+            onEdited()
+        }
+        Text("{cue.text.lines().count} {if cue.text.lines().count == 1 { "line" } else { "lines" }}, longest {longestLine()} characters, {cps()} characters a second").font(size: 11).color(.secondary)
+        if !misspelled.isEmpty {
+            Text("Spelling: {misspelled.joined(separator: ", ")}").font(size: 11).color(.red)
+        }
+        Spacer()
+    }
+    .padding(14)
+
+    fn longestLine() -> Int {
+        var n = 0
+        for line in cue.text.lines() {
+            n = max(n, line.count)
+        }
+        n
+    }
+
+    // Reading speed: the characters (without line breaks) a second.
+    fn cps() -> String {
+        let n = cue.text.replace("\n", with: "").count
+        let secs = Float(cue.end - cue.start) / 1000.0
+        if secs <= 0.0 { "–" } else { (Float(n) / secs).formatted(decimals: 1) }
+    }
+
+    fn refresh() {
+        startText = formatTime(cue.start)
+        endText = formatTime(cue.end)
+        durationText = (Float(cue.end - cue.start) / 1000.0).formatted(decimals: 3)
+    }
+
+    fn applyStart() {
+        if let ms = parseTime(startText) {
+            onBeforeEdit()
+            cue.start = ms
+            onEdited()
+        }
+        refresh()
+    }
+
+    fn applyEnd() {
+        if let ms = parseTime(endText) {
+            onBeforeEdit()
+            cue.end = ms
+            onEdited()
+        }
+        refresh()
+    }
+
+    fn applyDuration() {
+        if let s = Float(durationText.replace(",", with: ".")) {
+            if s > 0.0 {
+                onBeforeEdit()
+                cue.end = cue.start + Int(round(s * 1000.0))
+                onEdited()
+            }
+        }
+        refresh()
+    }
+
+    fn moveStart(_ ms: Int) {
+        onBeforeEdit()
+        cue.start = clampTime(cue.start + ms)
+        onEdited()
+        refresh()
+    }
+
+    fn moveEnd(_ ms: Int) {
+        onBeforeEdit()
+        cue.end = clampTime(cue.end + ms)
+        onEdited()
+        refresh()
+    }
+}
+
+view TimeNudge(onNudge: fn(Int)) {
+    HStack(spacing: 2) {
+        Button("−") { onNudge(-100) }.tooltip("100 ms earlier")
+        Button("+") { onNudge(100) }.tooltip("100 ms later")
+    }
+}

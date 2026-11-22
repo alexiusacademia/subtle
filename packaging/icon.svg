@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Subtle's app icon: a picture with two caption lines, over a timeline with its playhead (the macOS icon margin). Author: Alexius Academia. Date: 2026-11-23 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b52f0"/>
+      <stop offset="1" stop-color="#231e6b"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2670"/>
+      <stop offset="1" stop-color="#15123f"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="200" y="230" width="624" height="430" rx="52" fill="url(#screen)" stroke="#c7c9ff" stroke-width="18"/>
+  <rect x="290" y="500" width="444" height="50" rx="25" fill="#ffffff"/>
+  <rect x="360" y="580" width="304" height="50" rx="25" fill="#ffd23f"/>
+  <line x1="220" y1="770" x2="804" y2="770" stroke="#c7c9ff" stroke-width="16" stroke-linecap="round"/>
+  <line x1="320" y1="740" x2="320" y2="800" stroke="#c7c9ff" stroke-width="12" stroke-linecap="round"/>
+  <line x1="704" y1="740" x2="704" y2="800" stroke="#c7c9ff" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="512" cy="770" r="34" fill="#ffd23f"/>
+</svg>

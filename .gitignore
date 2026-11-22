@@ -1,0 +1,4 @@
+build/
+*.app
+/subtle
+.DS_Store

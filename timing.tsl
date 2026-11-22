@@ -1,0 +1,104 @@
+// Adjusting the timing of many cues at once:
+//
+// - shift: move cues earlier or later by a fixed amount;
+// - sync: two cues are given the times they should start at, and every
+//   time is stretched along the straight line through those two points
+//   (fixes subtitles that drift as well as start off);
+// - frame rate: subtitles timed for a video at one frame rate, played with
+//   a cut at another (23.976 ↔ 25, the usual PAL speed-up).
+//
+// Times never go below zero; a cue pushed before 0 starts at 0.
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+enum Scope { all, selected, fromSelected }
+
+// Which cues an adjustment applies to.
+fn scopeIndices(_ scope: Scope, count: Int, selection: [Int]) -> [Int] {
+    var out: [Int] = []
+    match scope {
+        .all -> {
+            for i in 0..count {
+                out.append(i)
+            }
+        }
+        .selected -> {
+            for i in selection.sorted() {
+                if i >= 0 && i < count {
+                    out.append(i)
+                }
+            }
+        }
+        .fromSelected -> {
+            if !selection.isEmpty {
+                var first = selection[0]
+                for i in selection {
+                    if i < first {
+                        first = i
+                    }
+                }
+                for i in first..count {
+                    out.append(i)
+                }
+            }
+        }
+    }
+    out
+}
+
+fn clampTime(_ ms: Int) -> Int {
+    if ms < 0 { 0 } else { ms }
+}
+
+fn shiftCues(_ cues: [Cue], by: Int, only: [Int]) -> [Cue] {
+    var out = cues
+    for i in only {
+        out[i].start = clampTime(out[i].start + by)
+        out[i].end = clampTime(out[i].end + by)
+    }
+    out
+}
+
+// Maps each time t to a + (t - fromA) * (b - a) / (fromB - fromA): the
+// times fromA and fromB land on a and b. nil when fromA == fromB.
+fn syncCues(_ cues: [Cue], fromA: Int, toA: Int, fromB: Int, toB: Int, only: [Int]) -> [Cue]? {
+    if fromA == fromB {
+        return nil
+    }
+    let scale = Float(toB - toA) / Float(fromB - fromA)
+    var out = cues
+    for i in only {
+        out[i].start = clampTime(toA + Int(round(Float(out[i].start - fromA) * scale)))
+        out[i].end = clampTime(toA + Int(round(Float(out[i].end - fromA) * scale)))
+    }
+    out
+}
+
+// Subtitles timed against a video at `from` frames a second, for a cut of
+// the same film at `to`: each time is multiplied by from / to.
+fn retimeFrameRate(_ cues: [Cue], from: Float, to: Float, only: [Int]) -> [Cue]? {
+    if from <= 0.0 || to <= 0.0 {
+        return nil
+    }
+    let factor = from / to
+    var out = cues
+    for i in only {
+        out[i].start = Int(round(Float(out[i].start) * factor))
+        out[i].end = Int(round(Float(out[i].end) * factor))
+    }
+    out
+}
+
+// Problems worth showing next to a cue: an end before its start, and an
+// overlap with the next cue.
+fn cueProblem(_ cues: [Cue], _ i: Int) -> String {
+    let c = cues[i]
+    if c.end <= c.start {
+        return "Ends before it starts"
+    }
+    if i + 1 < cues.count && cues[i + 1].start < c.end {
+        return "Overlaps the next cue"
+    }
+    ""
+}

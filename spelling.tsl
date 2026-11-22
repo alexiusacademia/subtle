@@ -1,0 +1,214 @@
+// Spell checking with the `text` library's Speller (~/Dev/text, spell.tsl):
+// the system's word list, with the user's own words kept in a dictionary
+// file in the app's data folder. The Spell Check sheet goes through the
+// cues from the selected one, a misspelled word at a time, and offers
+// Change, Change All, Ignore, Ignore All and Add to Dictionary; it wraps
+// round to the start once.
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+import "../text" as spell
+
+struct SpellHit {
+    cue: Int
+    from: Int
+    to: Int
+    word: String
+}
+
+fn dictionaryPath() -> String {
+    joinPath(appDataFolder("Subtle"), "dictionary.txt")
+}
+
+// The system's word list is there: macOS and most Linux systems have it
+// (Debian and Ubuntu: the wamerican package); Windows hasn't, and then
+// spell checking is off, as in Quill.
+fn spellingAvailable() -> Bool {
+    !spell.systemWordList().isEmpty
+}
+
+fn spellingMissingNote() -> String {
+    if platform() == "windows" {
+        "Spell checking uses the system's word list, which Windows doesn't have."
+    } else {
+        "The system's word list (/usr/share/dict/words) isn't there. On Debian and Ubuntu: sudo apt install wamerican"
+    }
+}
+
+// Words subtitles use that the system's list (Webster's of 1934) lacks
+// and the speller's endings don't make: "-ic" and "-ics" of listed words,
+// and words of film dialogue.
+let subtitleWords = "robotic robotics cyborg cyborgs android androids hologram holograms okay ok yeah yep nope uh um hmm hey wow whoa gonna wanna gotta kinda sorta ain't y'all dunno lemme gimme cmon c'mon alright wifi online offline smartphone laptop email emails texted texting selfie selfies drone drones spaceship spaceships teleport teleported freaky freaked freaking weirdo weirdos"
+
+fn loadSpeller() -> spell.Speller {
+    var sp = spell.speller(spell.systemWordList(), user: readFile(dictionaryPath()) ?? "")
+    for w in subtitleWords.split(" ") {
+        sp.words.insert(w)
+    }
+    sp
+}
+
+// The first misspelling at or after character `char` of cue `cue`, in the
+// cues up to `lastCue` (inclusive); nil when there's none.
+fn findMisspelling(_ cues: [Cue], _ sp: spell.Speller, cue: Int, char: Int, lastCue: Int) -> SpellHit? {
+    var i = cue
+    while i <= lastCue && i < cues.count {
+        for m in sp.misspellings(cues[i].text) {
+            if i > cue || m.from >= char {
+                return SpellHit(cue: i, from: m.from, to: m.to, word: m.word)
+            }
+        }
+        i += 1
+    }
+    nil
+}
+
+fn replaceRange(_ s: String, _ from: Int, _ to: Int, _ with: String) -> String {
+    s.substring(from: 0, to: from) + with + s.substring(from: to, to: s.count)
+}
+
+// The misspelled words of a text, for the cue editor to list.
+fn misspelledWords(_ sp: spell.Speller, _ text: String) -> [String] {
+    var out: [String] = []
+    for m in sp.misspellings(text) {
+        if !out.contains(m.word) {
+            out.append(m.word)
+        }
+    }
+    out
+}
+
+// A few characters either side of the word, on one line.
+fn context(_ s: String, _ from: Int, _ to: Int) -> (String, String, String) {
+    let a = max(0, from - 32)
+    let b = min(s.count, to + 32)
+    let before = (if a > 0 { "…" } else { "" }) + s.substring(from: a, to: from)
+    let after = s.substring(from: to, to: b) + (if b < s.count { "…" } else { "" })
+    (before.replace("\n", with: " ⏎ "), s.substring(from: from, to: to), after.replace("\n", with: " ⏎ "))
+}
+
+view SpellCheckSheet(cues: bind [Cue], sp: bind spell.Speller, startCue: Int, onBeforeEdit: fn(), onEdited: fn(), onAddWord: fn(String), onShow: fn(Int)) {
+    state hit = findMisspelling(cues, sp, cue: startCue, char: 0, lastCue: cues.count - 1)
+    state wrapped = startCue == 0
+    state replacement = ""
+    state changed = 0
+    state started = false
+
+    VStack(spacing: 12, alignment: .leading) {
+        Text("Spell Check").font(size: 16, weight: .semibold)
+        if let h = hit {
+            Text("Cue {h.cue + 1}").color(.secondary)
+            HStack(spacing: 0) {
+                Text(context(cues[h.cue].text, h.from, h.to).0)
+                Text(context(cues[h.cue].text, h.from, h.to).1).color(.red).font(size: 14, weight: .bold)
+                Text(context(cues[h.cue].text, h.from, h.to).2)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.lightGray, radius: 6)
+            HStack(spacing: 8) {
+                Text("Change to")
+                TextField("Replacement", text: replacement)
+                    .onSubmit { change() }
+            }
+            if sp.suggest(h.word).isEmpty {
+                Text("No suggestions.").color(.secondary)
+            } else {
+                HStack(spacing: 6) {
+                    for s in sp.suggest(h.word) {
+                        Button(s) { replacement = s }
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                Button("Change") { change() }
+                Button("Change All") { changeAll() }
+                Spacer()
+                Button("Ignore") { ignore() }
+                Button("Ignore All") { ignoreAll() }
+                Button("Add to Dictionary") { addToDictionary() }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Icon(.circleCheck).color(.green)
+                Text(if changed > 0 { "Spell check done: {changed} changed." } else { "Spell check done: no misspelled words." })
+            }
+        }
+        HStack {
+            Spacer()
+            Button("Close") { dismiss() }
+        }
+    }
+    .frame(width: 560)
+    .onAppear { show() }
+
+    // After hit changes: the cue shows in the window, and the first
+    // suggestion fills the field.
+    fn show() {
+        if let h = hit {
+            onShow(h.cue)
+            let s = sp.suggest(h.word)
+            replacement = if s.isEmpty { h.word } else { s[0] }
+        }
+    }
+
+    // On from character `char` of cue `cue`; once at the end, round from
+    // the first cue to the one it started at.
+    fn advance(cue: Int, char: Int) {
+        hit = findMisspelling(cues, sp, cue: cue, char: char, lastCue: if wrapped { startCue } else { cues.count - 1 })
+        if hit == nil && !wrapped {
+            wrapped = true
+            hit = findMisspelling(cues, sp, cue: 0, char: 0, lastCue: startCue)
+        }
+        show()
+    }
+
+    fn change() {
+        if let h = hit {
+            onBeforeEdit()
+            cues[h.cue].text = replaceRange(cues[h.cue].text, h.from, h.to, replacement)
+            onEdited()
+            changed += 1
+            advance(cue: h.cue, char: h.from + replacement.count)
+        }
+    }
+
+    // Every place the same word is flagged, in every cue.
+    fn changeAll() {
+        if let h = hit {
+            onBeforeEdit()
+            for i in 0..cues.count {
+                var ms = sp.misspellings(cues[i].text).filter { m in m.word == h.word }
+                var k = ms.count - 1
+                while k >= 0 {
+                    cues[i].text = replaceRange(cues[i].text, ms[k].from, ms[k].to, replacement)
+                    changed += 1
+                    k -= 1
+                }
+            }
+            onEdited()
+            advance(cue: h.cue, char: h.from + replacement.count)
+        }
+    }
+
+    fn ignore() {
+        if let h = hit {
+            advance(cue: h.cue, char: h.to)
+        }
+    }
+
+    fn ignoreAll() {
+        if let h = hit {
+            sp.ignoreAll(h.word)
+            advance(cue: h.cue, char: h.from)
+        }
+    }
+
+    fn addToDictionary() {
+        if let h = hit {
+            onAddWord(sp.addWord(h.word))
+            advance(cue: h.cue, char: h.from)
+        }
+    }
+}

@@ -1,0 +1,273 @@
+<!doctype html>
+<!--
+  Subtle's website. A static page: no build step, no dependencies.
+  The download buttons and cards are filled from downloads.json, the
+  release feed tools/publish.sh writes.
+
+  Author: Alexius Academia
+  Date: 2026-11-23
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="author" content="Alexius Academia">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Subtle — an SRT subtitle editor with video preview</title>
+  <meta name="description" content="Subtle is a free, open-source SRT subtitle editor for macOS, Windows and Linux: edit cues against the video, shift, sync and retime whole files, split and merge, spell check, and make subtitles from speech with Whisper.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#231e6b">
+  <meta property="og:title" content="Subtle — an SRT subtitle editor">
+  <meta property="og:description" content="Edit subtitles against the video, fix their timing in one step, and make them from speech with Whisper. Free and open source, for macOS, Windows and Linux.">
+  <meta property="og:image" content="https://subtle.syncster.dev/assets/main.jpg">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap bar">
+      <a class="brand" href="#">
+        <img src="assets/icon.png" alt="" width="32" height="32">
+        <span>Subtle</span>
+      </a>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="#timing">Timing</a>
+        <a href="#keys">Keys</a>
+        <a href="https://github.com/alexiusacademia/subtle">Source</a>
+        <a class="pill" href="#download">Download</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <p class="eyebrow">Free · Open source · macOS, Windows, Linux</p>
+        <h1>Subtitles that land<br>on the right frame.</h1>
+        <p class="lede">Subtle is an SRT editor with the video beside it. Fix a line, nudge it to the frame, and when the whole file is off, shift, sync or retime every cue in one step. No video to subtitle yet? Make the first draft from speech with Whisper.</p>
+        <div class="hero-get">
+          <a class="btn primary" id="hero-macos" href="#download">Download for macOS <small>Apple silicon</small></a>
+          <a class="btn" id="hero-windows" href="#download">Windows <small>64-bit</small></a>
+          <a class="btn" id="hero-linux" href="#download">Linux <small>x86-64 · ARM64</small></a>
+        </div>
+        <p class="fine" id="hero-version">Free · No account</p>
+        <figure class="shot">
+          <img src="assets/main.jpg" alt="Subtle with an SRT file open: the cues in a table, the video playing above the cue editor with the subtitle drawn over the picture, and the cue showing marked with a play arrow" width="1600" height="1000">
+        </figure>
+      </div>
+    </section>
+
+    <section class="features" id="features">
+      <div class="wrap">
+        <h2>Everything a subtitle file needs</h2>
+        <div class="grid">
+          <article>
+            <h3>Edit against the picture</h3>
+            <p>The video plays beside the cues, with the subtitles drawn over it as a viewer sees them. Select a cue and the video goes there; the cue playing is marked in the list.</p>
+          </article>
+          <article>
+            <h3>Time it to the frame</h3>
+            <p>Set a cue's start or end to the video's time with one key, nudge by 100 ms, or add a cue where the video is. Type times, durations, or drag nothing at all.</p>
+          </article>
+          <article>
+            <h3>Fix a whole file at once</h3>
+            <p>Shift every cue, sync two cues to where they belong and stretch the rest, change speed by a percentage, or convert between frame rates, for all cues or just some.</p>
+          </article>
+          <article>
+            <h3>Subtitles from speech</h3>
+            <p>Whisper listens to the video and writes the cues, split into subtitle-length lines: dozens of languages, or translated to English. It runs on your computer; nothing is uploaded.</p>
+          </article>
+          <article>
+            <h3>Split, merge, spell</h3>
+            <p>Split a cue after any word at the time you choose, merge cues, sort them, and fix overlaps. Spell check goes through every cue, with your own dictionary.</p>
+          </article>
+          <article>
+            <h3>Reading speed in view</h3>
+            <p>Each cue shows its lines, its longest line and its characters a second, and a red number marks a cue that ends before it starts or runs into the next.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="tour band" id="timing">
+      <div class="wrap">
+        <div class="row">
+          <div class="text">
+            <h2>Out of sync? Two numbers fix it.</h2>
+            <p>Subtitles from another release drift: right at the start, seconds off by the end. Tell Subtle where the first and the last cue should start, and it stretches every time between them. The preview shows what changes before you apply it, and Undo takes it back.</p>
+            <p>For subtitles that are off by the same amount all through, Shift does it, or <em>Shift All So Selected Cue Starts Here</em> with the video paused on the right frame. Speed % and Frame Rate handle the 23.976 ↔ 25 fps PAL speed-up.</p>
+          </div>
+          <figure class="shot"><img src="assets/timing.jpg" alt="The Adjust Timing sheet with Sync Two Cues chosen: the first cue should start at 00:00:01,250 and the tenth at 00:01:28,350, with a preview of the change" width="1600" height="1000" loading="lazy"></figure>
+        </div>
+        <div class="row flip">
+          <div class="text">
+            <h2>A first draft, from the sound.</h2>
+            <p>Subtle uses whisper.cpp to transcribe the video's dialogue into cues, at most 42 characters a line, split on words. Pick a model from tiny (fast) to large (most accurate) and download it from the same window, choose the language or let it detect it, or translate to English.</p>
+            <p>It runs whisper.cpp and ffmpeg where they're installed (on a Mac: <code>brew install whisper-cpp ffmpeg</code>), and the sound never leaves your computer.</p>
+          </div>
+          <figure class="shot"><img src="assets/whisper.jpg" alt="The Generate Subtitles with Whisper sheet: the video, the tiny model downloaded, English only, language detection, translate to English and a 42-character line length" width="1600" height="1000" loading="lazy"></figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="keys" id="keys">
+      <div class="wrap">
+        <h2>Keys worth knowing</h2>
+        <p class="sub">Cmd on macOS is Ctrl on Windows and Linux. The single keys work when you're not typing in a field.</p>
+        <table>
+          <tbody>
+            <tr><td><kbd>Space</kbd></td><td>Play or pause</td><td><kbd>J</kbd> <kbd>L</kbd></td><td>Back or forward 2 s (with Shift, ½ s)</td></tr>
+            <tr><td><kbd>P</kbd></td><td>Play the selected cue</td><td><kbd>G</kbd></td><td>Go to the cue at the video's time</td></tr>
+            <tr><td><kbd>Cmd</kbd> <kbd>[</kbd></td><td>Set the start to the video's time</td><td><kbd>Cmd</kbd> <kbd>]</kbd></td><td>Set the end to the video's time</td></tr>
+            <tr><td><kbd>Cmd</kbd> <kbd>K</kbd></td><td>Split the cue</td><td><kbd>Cmd</kbd> <kbd>M</kbd></td><td>Merge the selected cues</td></tr>
+            <tr><td><kbd>Cmd</kbd> <kbd>T</kbd></td><td>Adjust timing</td><td><kbd>Alt</kbd> <kbd>Cmd</kbd> <kbd>←</kbd> <kbd>→</kbd></td><td>Nudge the selection 100 ms (with Shift, 1 s)</td></tr>
+            <tr><td><kbd>Cmd</kbd> <kbd>;</kbd></td><td>Spell check</td><td><kbd>Cmd</kbd> <kbd>Z</kbd></td><td>Undo anything</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="open band" id="source">
+      <div class="wrap two">
+        <div>
+          <h2>Open source, written in Tessel</h2>
+          <p>Subtle is free software under the GNU LGPL 2.1 or later. Its video preview is <a href="https://reel.syncster.dev">Reel</a>'s: every container and decoder, H.264, HEVC, AV1, VP9 and the rest, written in <a href="https://tessel-lang.syncster.dev">Tessel</a>, with no FFmpeg inside. The whole app is one native program of a few megabytes.</p>
+          <p><a class="btn" href="https://github.com/alexiusacademia/subtle">Source on GitHub</a></p>
+        </div>
+        <div>
+          <h2>What it doesn't do yet</h2>
+          <ul>
+            <li>SubRip (.srt) files only; WebVTT and ASS are next.</li>
+            <li>Files must be UTF-8 text.</li>
+            <li>Spell checking is English, and uses the system's word list, which Windows doesn't have.</li>
+            <li>Whisper needs whisper.cpp and ffmpeg installed.</li>
+            <li>No macOS on Intel, for now.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="downloads" id="download">
+      <div class="wrap">
+        <h2>Download</h2>
+        <p class="sub" id="version-line">Subtle is free. There's no account and no sign-in.</p>
+        <div class="cards" id="cards">
+          <!-- Filled by the script below from downloads.json -->
+        </div>
+
+        <div class="callout">
+          <p><strong>On Windows you'll see a warning.</strong> Subtle for Windows isn't code-signed yet, so SmartScreen says it is from an <em>unknown publisher</em> the first time. Click <strong>More info</strong>, then <strong>Run anyway</strong>. Check the download against its SHA-256 if you want to be sure it's ours.</p>
+          <p>On macOS, open the disk image and drag Subtle to Applications. It's signed and notarized by Apple.</p>
+          <p>On Linux, the AppImage is one file: make it executable (<code>chmod +x Subtle-*.AppImage</code>) and open it. On Debian and Ubuntu, the .deb puts Subtle in your app menu instead.</p>
+        </div>
+
+        <div class="reqs">
+          <div>
+            <h3>macOS</h3>
+            <ul>
+              <li>macOS 12 Monterey or later</li>
+              <li>A Mac with Apple silicon (M1 or later)</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Windows</h3>
+            <ul>
+              <li>64-bit Windows 10 or 11</li>
+              <li>An installer that puts Subtle in your Start menu, with an uninstaller (no administrator rights needed)</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Linux</h3>
+            <ul>
+              <li>x86-64 or ARM64, glibc 2.28 or newer: Ubuntu 20.04, Debian 10, Fedora 29 and later</li>
+              <li>Sound needs GStreamer, which desktops have; spell checking needs a word list (<code>sudo apt install wamerican</code>)</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot">
+      <span>© 2026 <a href="https://syncster.dev" rel="author">Alexius Academia</a> · <a href="mailto:admin@syncster.dev">admin@syncster.dev</a> · <a href="https://syncster.dev">syncster.dev</a></span>
+      <span><a href="privacy.html">Privacy</a> · <a href="https://github.com/alexiusacademia/subtle">Source</a> · Written in <a href="https://tessel-lang.syncster.dev">Tessel</a></span>
+    </div>
+    <p class="wrap credit">The screenshots show <a href="https://mango.blender.org">Tears of Steel</a> © Blender Foundation, under <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>.</p>
+  </footer>
+
+  <script>
+    // The download buttons. downloads.json is the release feed: for each
+    // system its newest version, link, checksum and size (and on Linux the
+    // .deb beside the AppImage). A system without a link says "Coming soon".
+    const platforms = [
+      { key: 'macos', name: 'macOS', hint: 'Apple silicon · disk image', hero: 'hero-macos' },
+      { key: 'windows', name: 'Windows', hint: '64-bit · installer', hero: 'hero-windows' },
+      { key: 'linux', name: 'Linux', hint: 'x86-64 · AppImage', hero: 'hero-linux' },
+      { key: 'linux_arm64', name: 'Linux (ARM64)', hint: 'ARM64 · AppImage', hero: '' },
+    ]
+
+    function render(data) {
+      data = data && typeof data === 'object' ? data : {}
+      const cards = document.getElementById('cards')
+      cards.innerHTML = ''
+      let shown = ''
+      for (const p of platforms) {
+        const link = data[p.key] || {}
+        const ready = typeof link.url === 'string' && link.url !== ''
+        const card = document.createElement('div')
+        card.className = 'card'
+        const title = document.createElement('strong')
+        title.textContent = p.name
+        const meta = document.createElement('span')
+        meta.className = 'meta'
+        const parts = []
+        if (ready && link.version) parts.push('Version ' + link.version)
+        parts.push(p.hint)
+        if (ready && link.size > 0) parts.push((link.size / 1048576).toFixed(1) + ' MB')
+        meta.textContent = parts.join(' · ')
+        card.append(title, meta)
+        if (ready) {
+          const get = document.createElement('a')
+          get.className = 'get'
+          get.href = link.url
+          get.textContent = 'Download for ' + p.name
+          card.append(get)
+          if (link.sha256) {
+            const sum = document.createElement('span')
+            sum.className = 'sum'
+            sum.textContent = 'SHA-256 ' + link.sha256
+            card.append(sum)
+          }
+          if (link.deb) {
+            const other = document.createElement('a')
+            other.href = link.deb
+            other.textContent = 'Or the .deb (Debian, Ubuntu)'
+            card.append(other)
+          }
+          if (!shown) shown = link.version
+        } else {
+          const soon = document.createElement('span')
+          soon.className = 'soon'
+          soon.textContent = 'Coming soon'
+          card.append(soon)
+        }
+        cards.append(card)
+        const hero = p.hero ? document.getElementById(p.hero) : null
+        if (hero && ready) hero.href = link.url
+      }
+      if (shown) {
+        document.getElementById('hero-version').textContent = 'Version ' + shown + ' · Free · No account'
+        document.getElementById('version-line').textContent = 'Version ' + shown + '. Subtle is free. There’s no account and no sign-in.'
+      }
+    }
+
+    render({})
+    fetch('downloads.json', { cache: 'no-cache' })
+      .then(r => r.ok ? r.json() : {})
+      .then(render)
+      .catch(() => {})
+  </script>
+</body>
+</html>

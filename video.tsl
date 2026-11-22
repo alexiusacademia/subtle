@@ -1,0 +1,642 @@
+// The video preview: a picture with the cues drawn over it, and a transport
+// (play/pause, jumps, a seek bar, the time). Playback is Reel's: the pumps
+// decode in background work, the sound plays as WAV chunks of a second or
+// more, and a timer 100 times a second moves the clock, starts the next
+// chunk, shows the frame that's due and sends the pumps back to work (the
+// same steps as Reel's main.tsl, without its streams, effects and stats).
+//
+// The app talks to the pane through two bindings: it appends requests
+// (open a file, play, seek…) that the pane carries out on its next tick,
+// and the pane keeps `info` up to date (what's open, the time, whether
+// it's playing). `focus` is the selected cue's start: when it changes, the
+// pane seeks there (unless the video is already within half a second of it,
+// as it is right after "Set Start to Video Time").
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+import "../reel/core"
+import "../reel/play"
+
+let tickSeconds = 0.01
+
+enum VideoRequest {
+    open(path: String)
+    close
+    toggle
+    pause
+    seek(ms: Int)
+    jump(ms: Int)
+}
+
+struct VideoInfo {
+    loaded: Bool = false
+    opening: Bool = false
+    path: String = ""
+    // Milliseconds.
+    clock: Int = 0
+    duration: Int = 0
+    playing: Bool = false
+    error: String = ""
+}
+
+fn openInBackground(_ path: String) -> Result<play.Source> {
+    play.openSource(path)
+}
+
+// The cues showing at `ms`.
+fn cuesAt(_ cues: [Cue], _ ms: Int) -> [Cue] {
+    var out: [Cue] = []
+    for c in cues {
+        if c.start <= ms && ms < c.end {
+            out.append(c)
+        }
+    }
+    out
+}
+
+view VideoPane(cues: [Cue], focus: Int, requests: bind [VideoRequest], info: bind VideoInfo) {
+    state p = Player()
+    state sound: Sound? = nil
+    state fading: Sound? = nil
+    state fadingPath = ""
+    state upcoming: Sound? = nil
+    state upcomingPath = ""
+    state soundStarted = false
+    state redraw = 0
+    state openSerial = 0
+    state lastTickAt = 0.0
+    state timer = -1
+    state lastFocus = -1
+    // The seek bar: its value in seconds, and a seek waiting while it's dragged.
+    state barValue = 0.0
+    state barSerial = 0
+
+    VStack(spacing: 0) {
+        Canvas(redraw: redraw) { g in draw(g) }
+            .onResize { w, h in
+                p.boxW = max(Int(w), 16)
+                p.boxH = max(Int(h), 16)
+            }
+            .onPointer { e in
+                if e.kind == .down {
+                    toggle()
+                }
+            }
+            .frame(minHeight: 120, maxHeight: .infinity)
+            .accessibilityLabel("Video")
+        HStack(spacing: 6) {
+            Button(if p.playing { "❚❚" } else { "▶" }) { toggle() }
+                .tooltip("Play or pause (Space)")
+                .disabled(!p.loaded)
+            Button("−2 s") { jump(-2000) }.disabled(!p.loaded)
+            Button("+2 s") { jump(2000) }.disabled(!p.loaded)
+            Slider(value: barValue, from: 0, to: max(p.duration, 0.001)) { scrub() }
+                .disabled(!p.loaded)
+            Text("{formatTime(Int(p.clock * 1000.0))}").font(size: 12, family: "Menlo").color(.white)
+        }
+        .padding(6)
+    }
+    .background(.black)
+    .onAppear {
+        if timer < 0 {
+            timer = every(seconds: tickSeconds) { tick() }
+        }
+    }
+
+    // ---- Drawing ----
+
+    fn draw(_ g: Graphics) {
+        g.fillRect(x: 0, y: 0, width: g.width, height: g.height, color: .black)
+        var x = 0.0
+        var y = 0.0
+        var w = g.width
+        var h = g.height
+        if p.shown.width > 0 {
+            let fw = Float(p.shown.width)
+            let fh = Float(p.shown.height)
+            let k = min(g.width / fw, g.height / fh)
+            w = fw * k
+            h = fh * k
+            x = (g.width - w) / 2.0
+            y = (g.height - h) / 2.0
+            g.image(pixels: p.shown.pixels, pixelWidth: p.shown.width, pixelHeight: p.shown.height, x: x, y: y, width: w, height: h)
+        } else if info.opening {
+            g.text("Opening…", x: g.width / 2.0, y: g.height / 2.0, size: 14, color: .gray, align: .center)
+        } else if !p.error.isEmpty {
+            g.text(p.error, x: g.width / 2.0, y: g.height / 2.0, size: 13, color: .orange, align: .center)
+        } else if !p.loaded {
+            g.text("No video", x: g.width / 2.0, y: g.height / 2.0 - 10.0, size: 15, color: .rgb(200, 200, 200), align: .center)
+            g.text("File ▸ Open Video… (⇧⌘O)", x: g.width / 2.0, y: g.height / 2.0 + 12.0, size: 12, color: .gray, align: .center)
+            return
+        } else if !p.hasVideo {
+            g.text("Sound only", x: g.width / 2.0, y: 20.0, size: 12, color: .gray, align: .center)
+        }
+        drawCues(g, x: x, y: y, width: w, height: h)
+    }
+
+    // The cues showing now, white with a black outline, bottom centered.
+    fn drawCues(_ g: Graphics, x: Float, y: Float, width: Float, height: Float) {
+        let showing = cuesAt(cues, Int(p.clock * 1000.0))
+        if showing.isEmpty {
+            return
+        }
+        let size = max(12.0, min(34.0, height * 0.055))
+        var lines: [String] = []
+        for c in showing {
+            for line in c.text.lines() {
+                lines.append(stripTags(line))
+            }
+        }
+        var lineY = y + height - size * 0.8
+        var i = lines.count - 1
+        while i >= 0 {
+            g.text(lines[i], x: x + width / 2.0, y: lineY, size: size, color: .white, weight: .semibold, align: .bottom, halo: .black, haloWidth: max(2.0, size / 9.0))
+            lineY -= size * 1.25
+            i -= 1
+        }
+    }
+
+    // ---- Requests from the app ----
+
+    fn handleRequests() {
+        if requests.isEmpty {
+            return
+        }
+        let todo = requests
+        requests = []
+        for r in todo {
+            match r {
+                .open(path) -> open(path)
+                .close -> close()
+                .toggle -> toggle()
+                .pause -> {
+                    if p.playing {
+                        toggle()
+                    }
+                }
+                .seek(ms) -> seekTo(Float(ms) / 1000.0)
+                .jump(ms) -> jump(ms)
+            }
+        }
+    }
+
+    fn followFocus() {
+        if focus == lastFocus {
+            return
+        }
+        lastFocus = focus
+        if focus >= 0 && p.loaded && abs(Float(focus) / 1000.0 - p.clock) > 0.5 {
+            seekTo(Float(focus) / 1000.0)
+        }
+    }
+
+    fn publish() {
+        var i = info
+        i.loaded = p.loaded
+        i.path = p.path
+        i.duration = Int(p.duration * 1000.0)
+        i.playing = p.playing
+        i.error = p.error
+        let ms = Int(p.clock * 1000.0)
+        // While playing, a step of a frame or more (the app needn't build
+        // its views 100 times a second); exactly when paused.
+        if !p.playing || abs(ms - i.clock) >= 40 {
+            i.clock = ms
+        }
+        if i != info {
+            info = i
+        }
+    }
+
+    // ---- Opening ----
+
+    fn soundFolder() -> String {
+        let f = joinPath(appDataFolder("Subtle"), "sound")
+        createFolder(f)
+        f
+    }
+
+    fn open(_ path: String) {
+        stopSounds()
+        p = fresh()
+        openSerial += 1
+        let serial = openSerial
+        info.opening = true
+        redraw += 1
+        background(work: { openInBackground(path) }) { result in
+            if serial != openSerial {
+                return
+            }
+            info.opening = false
+            match result {
+                .ok(src) -> {
+                    p.start(src, folder: soundFolder())
+                    if !p.hasVideo && !p.hasAudio && p.error.isEmpty {
+                        p.error = "There's no video or sound here that can be played."
+                    }
+                    if lastFocus > 0 {
+                        p.seek(Float(lastFocus) / 1000.0)
+                    }
+                }
+                .failure(e) -> {
+                    p.error = "Can't open {path.fileName}: {e.message}"
+                }
+            }
+            redraw += 1
+        }
+    }
+
+    fn close() {
+        stopSounds()
+        p = fresh()
+        openSerial += 1
+        redraw += 1
+    }
+
+    fn fresh() -> Player {
+        var q = Player()
+        q.boxW = p.boxW
+        q.boxH = p.boxH
+        q
+    }
+
+    // ---- Controls ----
+
+    fn toggle() {
+        if !p.loaded {
+            return
+        }
+        if p.ended {
+            seekTo(0.0)
+            p.playing = true
+            return
+        }
+        p.playing = !p.playing
+        soundStarted = false
+        if p.playing {
+            sound?.resume()
+        } else {
+            sound?.pause()
+        }
+        fading?.stop()
+        redraw += 1
+    }
+
+    fn seekTo(_ t: Float) {
+        if !p.loaded {
+            return
+        }
+        stopSounds()
+        p.seek(t)
+        barValue = p.clock
+        redraw += 1
+    }
+
+    fn jump(_ ms: Int) {
+        seekTo(p.clock + Float(ms) / 1000.0)
+    }
+
+    // The seek bar moved: seek once it has stayed put for a moment, so a
+    // drag doesn't restart the decoders at every step.
+    fn scrub() {
+        barSerial += 1
+        let serial = barSerial
+        let target = barValue
+        after(seconds: 0.12) {
+            if serial == barSerial {
+                seekTo(target)
+            }
+        }
+    }
+
+    // ---- The timer ----
+
+    fn tick() {
+        lastTickAt = now()
+        handleRequests()
+        followFocus()
+        if !p.loaded {
+            publish()
+            return
+        }
+        let t = now()
+        var dt = t - p.lastTick
+        if dt <= 0.0 || dt > 0.5 {
+            dt = tickSeconds
+        }
+        p.lastTick = t
+        if p.playing && !p.ended {
+            if p.hasAudio {
+                tickSound(dt)
+            } else {
+                p.advanceByTime(dt)
+            }
+        }
+        var changed = p.pickFrame()
+        if p.playing {
+            // The cues over the picture change with the clock.
+            changed = true
+            barValue = p.clock
+        }
+        if changed {
+            redraw += 1
+        }
+        feed()
+        if p.playing && p.checkEnded() {
+            stopSounds()
+            p.playing = false
+        }
+        publish()
+    }
+
+    fn tickSound(_ dt: Float) {
+        if p.chunkPlaying {
+            if let s = sound {
+                let pos = s.position()
+                let heard = p.chunk.start + pos * p.chunk.speed
+                if !soundStarted {
+                    p.clock = heard
+                    if pos > 0.0 {
+                        soundStarted = true
+                    }
+                } else {
+                    p.clock += dt * p.speed
+                    if pos > 0.0 {
+                        let off = heard - p.clock
+                        if abs(off) > 0.3 {
+                            p.clock = heard
+                        } else {
+                            p.clock += off * 0.1
+                        }
+                    }
+                }
+                if pos >= p.chunk.length - 0.004 || (!s.isPlaying() && s.duration() > 0.0) {
+                    nextChunk()
+                }
+            }
+            prepareNextChunk()
+        } else if !p.chunks.isEmpty {
+            nextChunk()
+        } else if p.audioDone {
+            p.advanceByTime(dt)
+        }
+    }
+
+    fn nextChunk() {
+        if p.chunks.isEmpty {
+            if p.audioDone {
+                p.chunkPlaying = false
+            }
+            return
+        }
+        let c = p.chunks.removeFirst()
+        fading?.stop()
+        forgetChunkFile(fadingPath)
+        fading = sound
+        fadingPath = if p.chunkPlaying { p.chunk.path } else { "" }
+        var started = false
+        if upcomingPath == c.path {
+            if let u = upcoming {
+                u.setVolume(p.volume)
+                u.resume()
+                sound = u
+                started = true
+            }
+        }
+        if !started {
+            upcoming?.stop()
+            forgetChunkFile(upcomingPath)
+            sound = playSound(c.path, volume: p.volume)
+        }
+        upcoming = nil
+        upcomingPath = ""
+        p.chunk = c
+        p.chunkPlaying = true
+        if !soundStarted {
+            p.clock = c.start
+        }
+    }
+
+    // Loads the next chunk's sound ahead, muted and paused.
+    fn prepareNextChunk() {
+        if p.chunks.isEmpty || !upcomingPath.isEmpty {
+            return
+        }
+        let path = p.chunks[0].path
+        let u = playSound(path, volume: 0.0)
+        u.pause()
+        upcoming = u
+        upcomingPath = path
+    }
+
+    fn forgetChunkFile(_ path: String) {
+        if !path.isEmpty {
+            deleteFile(path: path)
+        }
+    }
+
+    fn stopSounds() {
+        sound?.stop()
+        fading?.stop()
+        upcoming?.stop()
+        if p.chunkPlaying {
+            forgetChunkFile(p.chunk.path)
+        }
+        forgetChunkFile(fadingPath)
+        if upcomingPath.isEmpty || p.chunks.isEmpty || p.chunks[0].path != upcomingPath {
+            forgetChunkFile(upcomingPath)
+        }
+        for c in p.chunks {
+            forgetChunkFile(c.path)
+        }
+        sound = nil
+        fading = nil
+        upcoming = nil
+        fadingPath = ""
+        upcomingPath = ""
+        soundStarted = false
+        p.chunkPlaying = false
+    }
+
+    // From a job's callback: start the next jobs now while the timer runs
+    // normally (see Reel's feedSoon).
+    fn feedSoon() {
+        if now() - lastTickAt < 0.02 {
+            feed()
+        }
+    }
+
+    // Sends the pumps back to work when what's decoded ahead runs low.
+    fn feed() {
+        if p.wantVideo() {
+            var pump = p.vpump[0]
+            pump.dec.setSkipNonReference(p.videoBehind())
+            p.vpump = []
+            p.videoBusy = true
+            let file = p.file
+            let media = p.media
+            let gen = p.gen
+            let serial = openSerial
+            background(work: { decodeVideoBatch(pump, file, media, count: 4) }) { b in
+                if serial != openSerial {
+                    return
+                }
+                p.videoBusy = false
+                p.vpump = [b.pump]
+                if gen == p.gen {
+                    p.raws.appendAll(b.raws)
+                    p.videoDone = b.pump.done
+                }
+                p.settle()
+                feedSoon()
+            }
+        }
+        if p.wantParse() {
+            var sp = p.sparser[0]
+            sp.setSkipNonReference(p.videoBehind())
+            p.sparser = []
+            p.parseBusy = true
+            let file = p.file
+            let media = p.media
+            let gen = p.gen
+            let serial = openSerial
+            background(work: { play.parseStage(sp, file, media, count: 3) }) { r in
+                if serial != openSerial {
+                    return
+                }
+                p.parseBusy = false
+                p.sparser = [r.parser]
+                if gen == p.gen {
+                    p.parsedQ.append(r.batch)
+                    p.parseDone = r.parser.done
+                }
+                p.settle()
+                feedSoon()
+            }
+        }
+        if p.wantReconstruct() {
+            let batch = p.parsedQ.removeFirst()
+            let split = p.split
+            let lr = p.recLuma[0]
+            let cr = if split { p.recChroma[0] } else { p.recLuma[0] }
+            p.recLuma = []
+            if split {
+                p.recChroma = []
+                p.chromaBusy = true
+            } else {
+                p.chromaDone = true
+            }
+            p.lumaBusy = true
+            let gen = p.gen
+            let serial = openSerial
+            background(work: { play.reconstructStage(lr, batch) }) { r in
+                if serial != openSerial {
+                    return
+                }
+                p.lumaBusy = false
+                p.recLuma = [r.rec]
+                if gen == p.gen {
+                    p.lumaOut = r.pictures
+                    p.lumaGrains = r.grains
+                    p.lumaDone = true
+                    p.joinHalves()
+                }
+                p.settle()
+                feedSoon()
+            }
+            if split {
+                background(work: { play.reconstructStage(cr, batch) }) { r in
+                    if serial != openSerial {
+                        return
+                    }
+                    p.chromaBusy = false
+                    p.recChroma = [r.rec]
+                    if gen == p.gen {
+                        p.chromaOut = r.pictures
+                        p.chromaDone = true
+                        p.joinHalves()
+                    }
+                    p.settle()
+                    feedSoon()
+                }
+            }
+        }
+        if p.wantConvert() {
+            var conv = p.conv[0]
+            conv.boxW = p.boxW * p.pixelScale
+            conv.boxH = p.boxH * p.pixelScale
+            let raws = p.raws
+            p.raws = []
+            p.conv = []
+            p.convertBusy = true
+            let gen = p.gen
+            let serial = openSerial
+            let last = p.videoDone
+            background(work: { convertBatch(conv, raws, gen: gen, last: last) }) { b in
+                if serial != openSerial {
+                    return
+                }
+                p.convertBusy = false
+                p.conv = [b.conv]
+                if gen == p.gen {
+                    p.frames.appendAll(b.frames)
+                }
+                feedSoon()
+            }
+        }
+        if p.wantAudio() {
+            let pump = p.apump[0]
+            p.apump = []
+            p.audioBusy = true
+            let file = p.file
+            let media = p.media
+            let gen = p.gen
+            let serial = openSerial
+            background(work: { decodeAudioBatch(pump, file, media) }) { b in
+                if serial != openSerial {
+                    if b.has {
+                        forgetChunkFile(b.chunk.path)
+                    }
+                    return
+                }
+                p.audioBusy = false
+                p.apump = [b.pump]
+                if gen != p.gen && b.has {
+                    forgetChunkFile(b.chunk.path)
+                }
+                if gen == p.gen {
+                    if b.has {
+                        p.chunks.append(b.chunk)
+                    }
+                    if (!b.has && !b.pump.starved) || (b.has && b.chunk.last) {
+                        p.audioDone = true
+                    }
+                }
+                p.settle()
+                feedSoon()
+            }
+        }
+    }
+}
+
+// The cue's text without its tags (<i>, <b>, <font …>, {\an8}), for drawing.
+fn stripTags(_ line: String) -> String {
+    var out = ""
+    var depth = 0
+    var brace = 0
+    for c in line.characters {
+        if c == "<" {
+            depth += 1
+        } else if c == ">" && depth > 0 {
+            depth -= 1
+        } else if c == "\{" {
+            brace += 1
+        } else if c == "}" && brace > 0 {
+            brace -= 1
+        } else if depth == 0 && brace == 0 {
+            out += c
+        }
+    }
+    out
+}

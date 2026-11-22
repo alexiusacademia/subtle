@@ -1,0 +1,23 @@
+# Subtle's project file: the version of Tessel it's built with, and what the
+# app says about itself.
+#
+# Author: Alexius Academia
+# Date: 2026-11-23
+
+tessel = "0.23.0"
+
+[app]
+name = "Subtle"
+id = "dev.syncster.subtle"
+version = "0.1.0"
+build = "1"
+description = "An SRT subtitle editor with timing adjustment"
+author = "Alexius Academia"
+copyright = "© 2026 Alexius Academia"
+category = "video"
+icon = "icon.png"
+
+[[app.documents]]
+name = "SubRip Subtitles"
+extensions = ["srt"]
+role = "editor"

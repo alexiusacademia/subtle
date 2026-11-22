@@ -1,0 +1,285 @@
+// The Adjust Timing sheet: shift, sync two cues, change speed by a percentage
+// or change frame rate, for
+// all the cues, the selected ones, or those from the selection on. It shows
+// what the first and last cue it changes will become before it's applied.
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+enum AdjustMode { shift, sync, speed, frameRate }
+
+let frameRates = ["23.976", "24", "25", "29.97", "30", "50", "59.94", "60"]
+
+view AdjustTiming(cues: [Cue], selection: [Int], onApply: fn([Cue], String)) {
+    state mode = AdjustMode.shift
+    state scope = if selection.count > 1 { Scope.selected } else { Scope.all }
+    // Shift
+    state offsetText = "+0.000"
+    // Sync: cue numbers (from 1) and the times they should start at.
+    state firstNumber = "1"
+    state firstTime = if cues.isEmpty { "" } else { formatTime(cues[0].start) }
+    state lastNumber = "{cues.count}"
+    state lastTime = if cues.isEmpty { "" } else { formatTime(cues[cues.count - 1].start) }
+    // Speed: 100 leaves it as it is; above 100 the subtitles run faster
+    // (every time is divided by percent / 100).
+    state percentText = "100"
+    // Frame rate
+    state fromRate = "23.976"
+    state toRate = "25"
+
+    VStack(spacing: 14, alignment: .leading) {
+        Text("Adjust Timing").font(size: 16, weight: .semibold)
+
+        Picker(selection: mode) {
+            Text("Shift").tag(AdjustMode.shift)
+            Text("Sync Two Cues").tag(AdjustMode.sync)
+            Text("Speed %").tag(AdjustMode.speed)
+            Text("Frame Rate").tag(AdjustMode.frameRate)
+        }
+
+        match mode {
+            .shift -> ShiftForm(offsetText: offsetText)
+            .sync -> SyncForm(firstNumber: firstNumber, firstTime: firstTime, lastNumber: lastNumber, lastTime: lastTime, count: cues.count)
+            .speed -> SpeedForm(percentText: percentText)
+            .frameRate -> RateForm(fromRate: fromRate, toRate: toRate)
+        }
+
+        Divider()
+
+        HStack(spacing: 8) {
+            Text("Apply to")
+            Picker(selection: scope, style: .menu) {
+                Text("All cues").tag(Scope.all)
+                Text("Selected cues ({selection.count})").tag(Scope.selected)
+                Text("From the first selected cue on").tag(Scope.fromSelected)
+            }
+        }
+
+        // What it will do.
+        if !problem().isEmpty {
+            HStack(spacing: 6) {
+                Icon(.warning).color(.red)
+                Text(problem()).color(.red)
+            }
+        } else {
+            VStack(spacing: 4, alignment: .leading) {
+                Text("Preview").font(size: 12, weight: .semibold).color(.secondary)
+                for line in preview() {
+                    Text(line).font(size: 12, family: "Menlo")
+                }
+            }
+        }
+
+        HStack {
+            Spacer()
+            Button("Cancel") { dismiss() }
+            Button("Apply") {
+                if let adjusted = result() {
+                    onApply(adjusted, summary())
+                    dismiss()
+                }
+            }
+            .disabled(!problem().isEmpty)
+        }
+    }
+    .frame(width: 500)
+
+    fn indices() -> [Int] {
+        // Sync works on the cues the two points cover when nothing narrower
+        // is chosen; the scope still applies.
+        scopeIndices(scope, count: cues.count, selection: selection)
+    }
+
+    fn cueNumber(_ text: String) -> Int? {
+        if let n = Int(text.trim()) {
+            if n >= 1 && n <= cues.count {
+                return n - 1
+            }
+        }
+        nil
+    }
+
+    fn rate(_ text: String) -> Float? {
+        if let r = Float(text.trim().replace(",", with: ".")) {
+            if r > 0.0 {
+                return r
+            }
+        }
+        nil
+    }
+
+    fn problem() -> String {
+        if indices().isEmpty {
+            return "No cues selected."
+        }
+        match mode {
+            .shift -> {
+                if parseOffset(offsetText) == nil {
+                    return "Type the shift as seconds (+2.5, -0.75) or a time (-00:00:01,500)."
+                }
+            }
+            .sync -> {
+                let a = cueNumber(firstNumber)
+                let b = cueNumber(lastNumber)
+                if a == nil || b == nil {
+                    return "Cue numbers go from 1 to {cues.count}."
+                }
+                if parseTime(firstTime) == nil || parseTime(lastTime) == nil {
+                    return "Type the new times like 00:01:02,345."
+                }
+                if cues[a ?? 0].start == cues[b ?? 0].start {
+                    return "The two cues must start at different times."
+                }
+            }
+            .speed -> {
+                if rate(percentText.replace("%", with: "")) == nil {
+                    return "Type the speed as a percentage, like 104.271."
+                }
+            }
+            .frameRate -> {
+                if rate(fromRate) == nil || rate(toRate) == nil {
+                    return "Frame rates are numbers, like 23.976 or 25."
+                }
+            }
+        }
+        ""
+    }
+
+    fn result() -> [Cue]? {
+        if !problem().isEmpty {
+            return nil
+        }
+        let only = indices()
+        match mode {
+            .shift -> shiftCues(cues, by: parseOffset(offsetText) ?? 0, only: only)
+            .sync -> {
+                let a = cueNumber(firstNumber) ?? 0
+                let b = cueNumber(lastNumber) ?? 0
+                syncCues(cues, fromA: cues[a].start, toA: parseTime(firstTime) ?? 0,
+                         fromB: cues[b].start, toB: parseTime(lastTime) ?? 0, only: only)
+            }
+            .speed -> retimeFrameRate(cues, from: 100.0, to: rate(percentText.replace("%", with: "")) ?? 100.0, only: only)
+            .frameRate -> retimeFrameRate(cues, from: rate(fromRate) ?? 1.0, to: rate(toRate) ?? 1.0, only: only)
+        }
+    }
+
+    fn summary() -> String {
+        let n = indices().count
+        match mode {
+            .shift -> "Shifted {n} cues by {formatOffset(parseOffset(offsetText) ?? 0)}"
+            .sync -> "Synced {n} cues"
+            .speed -> "Changed the speed of {n} cues to {percentText.trim()}%"
+            .frameRate -> "Converted {n} cues from {fromRate} to {toRate} fps"
+        }
+    }
+
+    // The first and last cue changed, before → after.
+    fn preview() -> [String] {
+        let only = indices()
+        let after = result() ?? cues
+        var lines: [String] = []
+        var shown: [Int] = [only[0]]
+        if only.count > 1 {
+            shown.append(only[only.count - 1])
+        }
+        for i in shown {
+            lines.append("#{i + 1}  {formatTime(cues[i].start)} → {formatTime(after[i].start)}")
+        }
+        lines.append("{only.count} of {cues.count} cues change")
+        lines
+    }
+}
+
+view ShiftForm(offsetText: bind String) {
+    VStack(spacing: 8, alignment: .leading) {
+        Text("Move the cues earlier (−) or later (+).").color(.secondary)
+        HStack(spacing: 8) {
+            TextField("+2.5 or -00:00:01,500", text: offsetText)
+                .frame(width: 200)
+                .autofocus()
+            for step in [-1000, -100, 100, 1000] {
+                Button(stepLabel(step)) { offsetText = formatSeconds((parseOffset(offsetText) ?? 0) + step) }
+            }
+        }
+        Text("Seconds (+2.5, -0.75), milliseconds (-300ms), or a time (-00:00:01,500).").font(size: 11).color(.secondary)
+    }
+}
+
+fn stepLabel(_ ms: Int) -> String {
+    let sign = if ms < 0 { "−" } else { "+" }
+    let a = if ms < 0 { -ms } else { ms }
+    if a >= 1000 { "{sign}{a / 1000} s" } else { "{sign}{a} ms" }
+}
+
+// "+1.250", "-0.100": an offset as signed seconds.
+fn formatSeconds(_ ms: Int) -> String {
+    let sign = if ms < 0 { "-" } else { "+" }
+    let a = if ms < 0 { -ms } else { ms }
+    "{sign}{a / 1000}.{pad(a % 1000, 3)}"
+}
+
+view SyncForm(firstNumber: bind String, firstTime: bind String, lastNumber: bind String, lastTime: bind String, count: Int) {
+    VStack(spacing: 8, alignment: .leading) {
+        Text("Give two cues (best: one near the start, one near the end) the times they should start at. Everything is stretched to fit, which fixes subtitles that drift.")
+            .color(.secondary)
+        Grid(spacing: 8) {
+            GridRow {
+                Text("")
+                Text("Cue #").font(size: 11).color(.secondary)
+                Text("Should start at").font(size: 11).color(.secondary)
+            }
+            GridRow {
+                Text("First").gridColumnAlignment(.trailing)
+                TextField("1", text: firstNumber).frame(width: 70)
+                TextField("00:00:00,000", text: firstTime).frame(width: 160)
+            }
+            GridRow {
+                Text("Second").gridColumnAlignment(.trailing)
+                TextField("{count}", text: lastNumber).frame(width: 70)
+                TextField("00:00:00,000", text: lastTime).frame(width: 160)
+            }
+        }
+    }
+}
+
+view RateForm(fromRate: bind String, toRate: bind String) {
+    VStack(spacing: 8, alignment: .leading) {
+        Text("For subtitles timed to a video at one frame rate, played with a cut at another (23.976 ↔ 25 is the usual PAL speed-up).")
+            .color(.secondary)
+        HStack(spacing: 8) {
+            Text("From")
+            Picker(selection: fromRate, style: .menu) {
+                for r in frameRates {
+                    Text("{r} fps").tag(r)
+                }
+            }
+            Text("to")
+            Picker(selection: toRate, style: .menu) {
+                for r in frameRates {
+                    Text("{r} fps").tag(r)
+                }
+            }
+        }
+    }
+}
+
+// Presets: the frame-rate changes people mean by a speed percentage.
+let speedPresets = [("23.976 → 25 fps", "104.271"), ("25 → 23.976 fps", "95.904"), ("24 → 25 fps", "104.167"), ("25 → 24 fps", "96")]
+
+view SpeedForm(percentText: bind String) {
+    VStack(spacing: 8, alignment: .leading) {
+        Text("Above 100% the subtitles run faster (every time gets shorter); below, slower. 100% leaves them as they are.")
+            .color(.secondary)
+        HStack(spacing: 8) {
+            TextField("100", text: percentText)
+                .frame(width: 110)
+                .autofocus()
+            Text("%")
+        }
+        HStack(spacing: 6) {
+            for preset in speedPresets {
+                Button(preset.0) { percentText = preset.1 }
+            }
+        }
+    }
+}

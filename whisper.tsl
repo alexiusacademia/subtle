@@ -1,0 +1,361 @@
+// Generating subtitles from speech with whisper.cpp: ffmpeg takes the
+// sound out of the video as 16 kHz mono WAV (what whisper.cpp reads), then
+// whisper-cli writes an SRT, split into lines of at most N characters on
+// word boundaries, which is read back as cues. Both programs are found in
+// Homebrew's folders (an app started from Finder has no shell PATH), and
+// the models (ggml-*.bin) are downloaded into the app's data folder from
+// the whisper.cpp project's Hugging Face page.
+//
+// Install the programs with: brew install whisper-cpp ffmpeg (macOS); on
+// Windows and Linux they're looked for on the PATH too (see installHint).
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+struct WhisperModel {
+    name: String
+    size: String
+    // Whether there's an English-only ".en" variant (better for English).
+    hasEnglish: Bool = true
+}
+
+let whisperModels = [
+    WhisperModel(name: "tiny", size: "75 MB"),
+    WhisperModel(name: "base", size: "142 MB"),
+    WhisperModel(name: "small", size: "466 MB"),
+    WhisperModel(name: "medium", size: "1.5 GB"),
+    WhisperModel(name: "large-v3-turbo", size: "1.6 GB", hasEnglish: false),
+]
+
+let whisperLanguages = [("auto", "Detect"), ("en", "English"), ("tl", "Tagalog"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("it", "Italian"), ("pt", "Portuguese"), ("nl", "Dutch"), ("ru", "Russian"), ("ja", "Japanese"), ("ko", "Korean"), ("zh", "Chinese"), ("id", "Indonesian"), ("hi", "Hindi"), ("ar", "Arabic")]
+
+// A program in Homebrew's or the system's folders, or on the PATH; "" when
+// it's nowhere. (".exe" is added on Windows.)
+fn findTool(_ name: String) -> String {
+    let windows = platform() == "windows"
+    let file = if windows { name + ".exe" } else { name }
+    var dirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"]
+    if let path = environment("PATH") {
+        dirs.appendAll(path.split(if windows { ";" } else { ":" }))
+    }
+    for dir in dirs {
+        if dir.isEmpty {
+            continue
+        }
+        let p = joinPath(dir, file)
+        if fileExists(p) {
+            return p
+        }
+    }
+    ""
+}
+
+// How to install whisper.cpp and ffmpeg here.
+fn installHint() -> String {
+    match platform() {
+        "macos" -> "brew install whisper-cpp ffmpeg"
+        "windows" -> "winget install Gyan.FFmpeg, and whisper-cli.exe from github.com/ggml-org/whisper.cpp/releases (on the PATH)"
+        _ -> "sudo apt install ffmpeg, and whisper-cli from whisper.cpp (github.com/ggml-org/whisper.cpp) on the PATH"
+    }
+}
+
+fn modelsFolder() -> String {
+    let f = joinPath(appDataFolder("Subtle"), "models")
+    createFolder(f)
+    f
+}
+
+fn modelFileName(_ name: String, english: Bool) -> String {
+    if english { "ggml-{name}.en.bin" } else { "ggml-{name}.bin" }
+}
+
+// Where the model is: the app's folder, or Homebrew's whisper-cpp folder;
+// "" when it isn't downloaded.
+fn installedModel(_ file: String) -> String {
+    for dir in [modelsFolder(), "/opt/homebrew/share/whisper-cpp", "/usr/local/share/whisper-cpp"] {
+        let p = joinPath(dir, file)
+        if fileExists(p) {
+            return p
+        }
+    }
+    ""
+}
+
+fn modelURL(_ file: String) -> String {
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{file}"
+}
+
+// "whisper_print_progress_callback: progress =  42%" → 42, else -1.
+fn whisperProgress(_ line: String) -> Int {
+    if let i = line.find("progress =") {
+        let rest = line.substring(from: i + 10, to: line.count).replace("%", with: "").trim()
+        return Int(rest) ?? -1
+    }
+    -1
+}
+
+// What whisper-cli prints as it goes: "[00:00:01.000 --> 00:00:03.000]  Hello".
+fn isTranscriptLine(_ line: String) -> Bool {
+    line.hasPrefix("[") && line.contains("-->")
+}
+
+fn whisperArgs(model: String, wav: String, outBase: String, language: String, translate: Bool, maxLen: Int) -> [String] {
+    var args = ["-m", model, "-f", wav, "-osrt", "-of", outBase, "-pp", "-l", language, "-t", "8"]
+    if maxLen > 0 {
+        args.appendAll(["-ml", "{maxLen}", "-sow"])
+    }
+    if translate {
+        args.append("-tr")
+    }
+    args
+}
+
+enum WhisperStage { idle, downloading, extracting, transcribing, failed }
+
+view WhisperSheet(source: String, hasCues: Bool, onDone: fn([Cue])) {
+    state file = source
+    state model = "base"
+    state english = false
+    state language = "auto"
+    state translate = false
+    state maxLenText = "42"
+    state stage = WhisperStage.idle
+    state progress = 0.0
+    state status = ""
+    state lines: [String] = []
+    state job = -1
+    state downloadJob = -1
+    state refresh = 0
+
+    VStack(spacing: 12, alignment: .leading) {
+        Text("Generate Subtitles with Whisper").font(size: 16, weight: .semibold)
+        if findTool("whisper-cli").isEmpty || findTool("ffmpeg").isEmpty {
+            VStack(spacing: 6, alignment: .leading) {
+                Text("Whisper needs whisper.cpp (whisper-cli) and ffmpeg. To install them:").color(.orange)
+                HStack(spacing: 8) {
+                    Text(installHint()).font(size: 12, family: "Menlo").selectable()
+                    Button("Copy") { copyToClipboard(installHint()) }
+                }
+            }
+        }
+        Grid(spacing: 8) {
+            GridRow {
+                Text("Video").gridColumnAlignment(.trailing)
+                HStack(spacing: 8) {
+                    Text(if file.isEmpty { "None chosen" } else { file.fileName }).lineLimit(1)
+                    Button("Choose…") {
+                        if let f = openFile(title: "Video or sound to transcribe") {
+                            file = f
+                        }
+                    }
+                }
+            }
+            GridRow {
+                Text("Model").gridColumnAlignment(.trailing)
+                HStack(spacing: 8) {
+                    Picker(selection: model, style: .menu) {
+                        for m in whisperModels {
+                            Text("{m.name} ({m.size})").tag(m.name)
+                        }
+                    }
+                    if canBeEnglish() {
+                        Toggle("English only", isOn: english)
+                    }
+                }
+            }
+            GridRow {
+                Text("").gridColumnAlignment(.trailing)
+                HStack(spacing: 8) {
+                    if modelPath().isEmpty {
+                        Text("Not downloaded").color(.secondary)
+                        Button("Download") { downloadModel() }
+                            .disabled(stage != .idle && stage != .failed)
+                    } else {
+                        Icon(.circleCheck).color(.green)
+                        Text("Downloaded").color(.secondary)
+                    }
+                }
+            }
+            GridRow {
+                Text("Language").gridColumnAlignment(.trailing)
+                Picker(selection: language, style: .menu) {
+                    for l in whisperLanguages {
+                        Text(l.1).tag(l.0)
+                    }
+                }
+            }
+            GridRow {
+                Text("").gridColumnAlignment(.trailing)
+                Toggle("Translate to English", isOn: translate)
+            }
+            GridRow {
+                Text("Line length").gridColumnAlignment(.trailing)
+                HStack(spacing: 6) {
+                    TextField("42", text: maxLenText).frame(width: 60)
+                    Text("characters at most per cue (0: whole sentences)").color(.secondary)
+                }
+            }
+        }
+        if hasCues {
+            Text("The cues made replace the ones open now (Undo brings them back).").font(size: 11).color(.secondary)
+        }
+        if stage != .idle {
+            VStack(spacing: 6, alignment: .leading) {
+                if stage != .failed {
+                    ProgressBar(value: progress)
+                }
+                Text(status).color(if stage == .failed { Color.red } else { Color.secondary })
+                for line in lines {
+                    Text(line).font(size: 11, family: "Menlo").lineLimit(1)
+                }
+            }
+        }
+        HStack {
+            Spacer()
+            if busy() {
+                Button("Stop") { stop() }
+            } else {
+                Button("Cancel") { dismiss() }
+            }
+            Button("Generate") { start() }
+                .disabled(busy() || file.isEmpty || modelPath().isEmpty || findTool("whisper-cli").isEmpty || findTool("ffmpeg").isEmpty)
+        }
+    }
+    .frame(width: 560)
+
+    fn busy() -> Bool {
+        stage == .downloading || stage == .extracting || stage == .transcribing
+    }
+
+    fn canBeEnglish() -> Bool {
+        for m in whisperModels {
+            if m.name == model {
+                return m.hasEnglish
+            }
+        }
+        false
+    }
+
+    fn modelFile() -> String {
+        modelFileName(model, english: english && canBeEnglish())
+    }
+
+    // (`refresh` makes this look again once a download ends.)
+    fn modelPath() -> String {
+        if refresh < 0 { "" } else { installedModel(modelFile()) }
+    }
+
+    fn downloadModel() {
+        let name = modelFile()
+        let to = joinPath(modelsFolder(), name)
+        stage = .downloading
+        progress = 0.0
+        status = "Downloading {name}…"
+        lines = []
+        downloadJob = download(url: modelURL(name), to: to, progress: { f in
+            progress = f
+        }) { ok in
+            downloadJob = -1
+            if ok {
+                stage = .idle
+                status = ""
+            } else {
+                stage = .failed
+                status = "The download of {name} failed. Check the connection and try again."
+            }
+            refresh += 1
+        }
+    }
+
+    fn start() {
+        let wav = joinPath(tempFolder(), "subtle-whisper.wav")
+        let outBase = joinPath(tempFolder(), "subtle-whisper")
+        deleteFile(path: wav)
+        deleteFile(path: outBase + ".srt")
+        stage = .extracting
+        progress = 0.0
+        status = "Taking the sound out of {file.fileName}…"
+        lines = []
+        job = runCommand(path: findTool("ffmpeg"), args: ["-y", "-nostdin", "-i", file, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav], onOutput: { line in
+            if line.contains("Error") || line.contains("error") {
+                keepLine(line)
+            }
+        }) { code in
+            job = -1
+            if stage != .extracting {
+                return
+            }
+            if code != 0 || !fileExists(wav) {
+                stage = .failed
+                status = "ffmpeg couldn't take the sound out of {file.fileName} (code {code})."
+                return
+            }
+            transcribe(wav, outBase)
+        }
+    }
+
+    fn transcribe(_ wav: String, _ outBase: String) {
+        stage = .transcribing
+        progress = 0.0
+        status = "Listening with the {model} model…"
+        let maxLen = Int(maxLenText.trim()) ?? 42
+        job = runCommand(path: findTool("whisper-cli"), args: whisperArgs(model: modelPath(), wav: wav, outBase: outBase, language: language, translate: translate, maxLen: maxLen), onOutput: { line in
+            let pct = whisperProgress(line)
+            if pct >= 0 {
+                progress = min(Float(pct), 100.0) / 100.0
+                status = "Listening with the {model} model… {min(pct, 100)}%"
+            } else if isTranscriptLine(line) {
+                keepLine(line)
+            } else if line.contains("error") {
+                keepLine(line)
+            }
+        }) { code in
+            job = -1
+            deleteFile(path: wav)
+            if stage != .transcribing {
+                return
+            }
+            let srt = outBase + ".srt"
+            if code != 0 || !fileExists(srt) {
+                stage = .failed
+                status = "whisper-cli stopped with code {code}."
+                return
+            }
+            var made = parseSrt(readFile(srt) ?? "").cues
+            deleteFile(path: srt)
+            for i in 0..made.count {
+                made[i].text = made[i].text.trim()
+            }
+            made = made.filter { c in !c.text.isEmpty }
+            if made.isEmpty {
+                stage = .failed
+                status = "No speech was found."
+                return
+            }
+            stage = .idle
+            onDone(made)
+            dismiss()
+        }
+    }
+
+    // The last few lines printed, to show what's happening.
+    fn keepLine(_ line: String) {
+        lines.append(line)
+        if lines.count > 4 {
+            lines.removeFirst()
+        }
+    }
+
+    fn stop() {
+        if job >= 0 {
+            stopCommand(job)
+        }
+        if downloadJob >= 0 {
+            cancelRequest(downloadJob)
+        }
+        stage = .idle
+        status = ""
+        job = -1
+        downloadJob = -1
+    }
+}

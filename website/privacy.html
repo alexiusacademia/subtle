@@ -1,0 +1,41 @@
+<!doctype html>
+<!--
+  Subtle's privacy page. Author: Alexius Academia. Date: 2026-11-23
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy — Subtle</title>
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap bar">
+      <a class="brand" href="./"><img src="assets/icon.png" alt="" width="32" height="32"><span>Subtle</span></a>
+      <nav><a class="pill" href="./#download">Download</a></nav>
+    </div>
+  </header>
+  <main>
+    <section>
+      <div class="wrap" style="max-width: 760px">
+        <h1>Privacy</h1>
+        <h2>The app</h2>
+        <p>Subtle doesn't collect anything about you or your files. It has no account, no analytics and no usage reports. Your subtitles and videos are read and written on your computer only.</p>
+        <p>Subtle goes online for one thing: when you press <strong>Download</strong> in the Whisper window, it downloads that speech model from the whisper.cpp project's page on Hugging Face (<code>huggingface.co</code>). That request says which file it wants, and nothing about you or your work.</p>
+        <h2>Speech to text</h2>
+        <p>Generating subtitles runs whisper.cpp and ffmpeg on your computer. The sound of your video is never uploaded anywhere.</p>
+        <h2>On your computer</h2>
+        <p>Subtle keeps the words you add to its dictionary and the speech models you download in its own folder (on macOS, <code>~/Library/Application Support/Subtle</code>), and short-lived sound files while a video plays or is transcribed.</p>
+        <h2>This website</h2>
+        <p>The site has no cookies and no trackers. The downloads come from Google Cloud Storage, which, like any web server, sees the address that asks for a file.</p>
+        <h2>Questions</h2>
+        <p>Write to <a href="mailto:admin@syncster.dev">admin@syncster.dev</a>.</p>
+      </div>
+    </section>
+  </main>
+  <footer><div class="wrap foot"><span>© 2026 <a href="https://syncster.dev">Alexius Academia</a></span><span><a href="./">Subtle</a></span></div></footer>
+</body>
+</html>

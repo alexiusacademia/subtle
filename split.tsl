@@ -1,0 +1,185 @@
+// Splitting a cue in two: at a place in its text (after a word) and at a
+// time. The Split Cue sheet shows the cue's words to click (the place to
+// split after) and the time, which starts as the video's time when that's
+// inside the cue, else in proportion to the text on each side.
+//
+// (Tessel's TextField doesn't say where its caret is, so "at the cursor"
+// is a click on the word in the sheet.)
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+// The places a text can be split: the character index after each word
+// but the last.
+fn splitPoints(_ text: String) -> [Int] {
+    let chars = text.characters
+    var points: [Int] = []
+    var inWord = false
+    for (i, c) in chars.enumerated() {
+        let space = c == " " || c == "\n" || c == "\t"
+        if inWord && space {
+            points.append(i)
+        }
+        inWord = !space
+    }
+    points
+}
+
+// The words of a text, each with the split point after it (-1 for the
+// last), line by line: for the sheet to show.
+struct SplitWord {
+    word: String
+    after: Int
+}
+
+fn splitWords(_ text: String) -> [[SplitWord]] {
+    let chars = text.characters
+    var lines: [[SplitWord]] = [[]]
+    var word = ""
+    for (i, c) in chars.enumerated() {
+        if c == " " || c == "\n" || c == "\t" {
+            if !word.isEmpty {
+                lines[lines.count - 1].append(SplitWord(word: word, after: i))
+                word = ""
+            }
+            if c == "\n" {
+                lines.append([])
+            }
+        } else {
+            word += c
+        }
+    }
+    if !word.isEmpty {
+        lines[lines.count - 1].append(SplitWord(word: word, after: -1))
+    }
+    lines.filter { l in !l.isEmpty }
+}
+
+// The split point to start with: the line break nearest the middle, or
+// else the word end nearest the middle.
+fn defaultSplitPoint(_ text: String) -> Int {
+    let points = splitPoints(text)
+    if points.isEmpty {
+        return -1
+    }
+    let chars = text.characters
+    let middle = chars.count / 2
+    var best = -1
+    for p in points {
+        if chars[p] == "\n" && (best < 0 || abs(p - middle) < abs(best - middle)) {
+            best = p
+        }
+    }
+    if best >= 0 {
+        return best
+    }
+    best = points[0]
+    for p in points {
+        if abs(p - middle) < abs(best - middle) {
+            best = p
+        }
+    }
+    best
+}
+
+fn textBefore(_ text: String, _ at: Int) -> String {
+    text.substring(from: 0, to: at).trim()
+}
+
+fn textAfter(_ text: String, _ at: Int) -> String {
+    text.substring(from: at, to: text.count).trim()
+}
+
+// The time in proportion to the characters before the split.
+fn proportionalTime(_ cue: Cue, _ at: Int) -> Int {
+    let before = textBefore(cue.text, at).count
+    let total = before + textAfter(cue.text, at).count
+    if total == 0 {
+        return (cue.start + cue.end) / 2
+    }
+    cue.start + Int(round(Float(cue.end - cue.start) * Float(before) / Float(total)))
+}
+
+// The two cues: the text before `at` until `time`, the rest from `time`.
+// `at` -1 keeps all the text in both (a split by time only).
+fn splitCue(_ cue: Cue, at: Int, time: Int) -> (Cue, Cue) {
+    let t = max(cue.start + 1, min(time, cue.end - 1))
+    let first = if at < 0 { cue.text } else { textBefore(cue.text, at) }
+    let second = if at < 0 { cue.text } else { textAfter(cue.text, at) }
+    (Cue(start: cue.start, end: t, text: first), Cue(start: t, end: cue.end, text: second))
+}
+
+view SplitCueSheet(cue: Cue, videoTime: Int, onSplit: fn(Int, Int)) {
+    state at = defaultSplitPoint(cue.text)
+    state timeText = formatTime(if videoTime > cue.start && videoTime < cue.end { videoTime } else { proportionalTime(cue, defaultSplitPoint(cue.text)) })
+
+    VStack(spacing: 12, alignment: .leading) {
+        Text("Split Cue").font(size: 16, weight: .semibold)
+        Text("Click the word to split after.").color(.secondary)
+        VStack(spacing: 6, alignment: .leading) {
+            for line in splitWords(cue.text) {
+                HStack(spacing: 2) {
+                    for w in line {
+                        Text(if w.after == at { w.word + "  ✂" } else { w.word })
+                            .padding(4)
+                            .background(if w.after == at { Color.highlight } else { Color.clear }, radius: 4)
+                            .hoverBackground(.lightGray, radius: 4)
+                            .onTap {
+                                if w.after >= 0 {
+                                    at = w.after
+                                    if !videoInside() {
+                                        timeText = formatTime(proportionalTime(cue, at))
+                                    }
+                                }
+                            }
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(.lightGray, radius: 6)
+        HStack(spacing: 8) {
+            Text("Split at")
+            TextField("00:00:00,000", text: timeText).frame(width: 140)
+            if videoInside() {
+                Button("Video Time") { timeText = formatTime(videoTime) }
+            }
+            Button("By Text Length") { timeText = formatTime(proportionalTime(cue, at)) }
+        }
+        if !problem().isEmpty {
+            Text(problem()).color(.red)
+        } else {
+            VStack(spacing: 4, alignment: .leading) {
+                Text("{formatTime(cue.start)} → {formatTime(parseTime(timeText) ?? 0)}   {oneLine(textBefore(cue.text, at))}").font(size: 12, family: "Menlo")
+                Text("{formatTime(parseTime(timeText) ?? 0)} → {formatTime(cue.end)}   {oneLine(textAfter(cue.text, at))}").font(size: 12, family: "Menlo")
+            }
+        }
+        HStack {
+            Spacer()
+            Button("Cancel") { dismiss() }
+            Button("Split") {
+                onSplit(at, parseTime(timeText) ?? 0)
+                dismiss()
+            }
+            .disabled(!problem().isEmpty)
+        }
+    }
+    .frame(width: 520)
+
+    fn videoInside() -> Bool {
+        videoTime > cue.start && videoTime < cue.end
+    }
+
+    fn problem() -> String {
+        if at < 0 {
+            return "This cue has one word: there's nowhere to split its text."
+        }
+        if let t = parseTime(timeText) {
+            if t <= cue.start || t >= cue.end {
+                return "The time must be inside the cue ({formatTime(cue.start)} – {formatTime(cue.end)})."
+            }
+            return ""
+        }
+        "Type the time like 00:01:02,345."
+    }
+}

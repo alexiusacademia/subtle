@@ -1,0 +1,124 @@
+// Tests of reading, writing and retiming SRT files. Run: tessel test .
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+let sample = "1\r\n00:00:01,000 --> 00:00:02,500\r\nHello\r\n\r\n2\r\n00:00:03,000 --> 00:00:05,000 X1:10 Y1:20\r\nTwo\r\nlines\r\n\r\n"
+
+test "times are formatted and read back" {
+    expect(formatTime(3_723_456) == "01:02:03,456")
+    expect(formatTime(-5) == "00:00:00,000")
+    expect(parseTime("01:02:03,456") == 3_723_456)
+    expect(parseTime("01:02:03.4") == 3_723_400)
+    expect(parseTime("2:03,456") == 123_456)
+    expect((parseTime("abc") ?? -1) == -1)
+    expect((parseTime("1:x:3") ?? -1) == -1)
+}
+
+test "offsets take seconds or a time, with a sign" {
+    expect(parseOffset("+1.5") == 1500)
+    expect(parseOffset("-0.25") == -250)
+    expect(parseOffset("2") == 2000)
+    expect(parseOffset("-00:00:01,500") == -1500)
+    expect(parseOffset("300ms") == 300)
+    expect(parseOffset("1:30") == 90_000)
+    expect((parseOffset("soon") ?? -1) == -1)
+}
+
+test "a file is read with its cues and line endings" {
+    let f = parseSrt(sample)
+    expect(f.cues.count == 2)
+    expect(f.newline == "\r\n")
+    expect(f.cues[0].start == 1000)
+    expect(f.cues[0].end == 2500)
+    expect(f.cues[0].text == "Hello")
+    expect(f.cues[1].text == "Two\nlines")
+    expect(f.warnings.isEmpty)
+}
+
+test "a file without numbers or blank lines still reads" {
+    let f = parseSrt("00:00:01,000 --> 00:00:02,000\nA\n00:00:03,000 --> 00:00:04,000\nB")
+    expect(f.cues.count == 2)
+    expect(f.cues[1].text == "B")
+}
+
+test "writing gives back the same file" {
+    let f = parseSrt(sample)
+    let out = formatSrt(f.cues, newline: f.newline)
+    expect(out == sample.replace(" X1:10 Y1:20", with: ""))
+}
+
+test "shifting moves the chosen cues and stops at zero" {
+    let cues = parseSrt(sample).cues
+    let later = shiftCues(cues, by: 1500, only: [0, 1])
+    expect(later[0].start == 2500)
+    expect(later[1].end == 6500)
+    let earlier = shiftCues(cues, by: -2000, only: [0])
+    expect(earlier[0].start == 0)
+    expect(earlier[0].end == 500)
+    expect(earlier[1].start == 3000)
+}
+
+test "syncing stretches between two points" {
+    let cues = parseSrt(sample).cues
+    // 1 s → 2 s and 3 s → 6 s: scale 2, so 2.5 s → 5 s and 5 s → 10 s.
+    let synced = syncCues(cues, fromA: 1000, toA: 2000, fromB: 3000, toB: 6000, only: [0, 1]) ?? []
+    expect(synced[0].start == 2000)
+    expect(synced[0].end == 5000)
+    expect(synced[1].start == 6000)
+    expect(synced[1].end == 10_000)
+    expect((syncCues(cues, fromA: 1000, toA: 0, fromB: 1000, toB: 5, only: [0]) ?? []).isEmpty)
+}
+
+test "frame rates scale the times" {
+    let cues = [Cue(start: 25_000, end: 50_000, text: "x")]
+    let pal = retimeFrameRate(cues, from: 25.0, to: 50.0, only: [0]) ?? []
+    expect(pal[0].start == 12_500)
+    expect(pal[0].end == 25_000)
+}
+
+test "scopes pick the cues" {
+    expect(scopeIndices(.all, count: 3, selection: []) == [0, 1, 2])
+    expect(scopeIndices(.selected, count: 5, selection: [3, 1]) == [1, 3])
+    expect(scopeIndices(.fromSelected, count: 5, selection: [3, 2]) == [2, 3, 4])
+    expect(scopeIndices(.fromSelected, count: 5, selection: []).isEmpty)
+}
+
+test "sorting keeps equal starts in order" {
+    let cues = [Cue(start: 5, end: 6, text: "b"), Cue(start: 1, end: 2, text: "a"), Cue(start: 5, end: 7, text: "c")]
+    let s = sortedCues(cues)
+    expect(s[0].text == "a")
+    expect(s[1].text == "b")
+    expect(s[2].text == "c")
+}
+
+test "split points come after words" {
+    expect(splitPoints("Hello there friend") == [5, 11])
+    expect(splitPoints("One\nTwo") == [3])
+    expect(splitPoints("Alone").isEmpty)
+}
+
+test "the default split is the line break, else the middle word" {
+    expect(defaultSplitPoint("First line here\nSecond") == 15)
+    expect(defaultSplitPoint("aa bb cc dd") == 5)
+    expect(defaultSplitPoint("Alone") == -1)
+}
+
+test "splitting a cue divides its text and time" {
+    let cue = Cue(start: 1000, end: 3000, text: "Hello there\nfriend")
+    let (a, b) = splitCue(cue, at: 11, time: 2200)
+    expect(a.text == "Hello there")
+    expect(a.end == 2200)
+    expect(b.text == "friend")
+    expect(b.start == 2200)
+    expect(b.end == 3000)
+    // In proportion: 11 characters of 17.
+    expect(proportionalTime(cue, 11) == 1000 + Int(round(2000.0 * 11.0 / 17.0)))
+}
+
+test "speed by percent divides the times" {
+    let cues = [Cue(start: 10_000, end: 20_000, text: "x")]
+    let faster = retimeFrameRate(cues, from: 100.0, to: 125.0, only: [0]) ?? []
+    expect(faster[0].start == 8000)
+    expect(faster[0].end == 16_000)
+}

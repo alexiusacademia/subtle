@@ -1,0 +1,241 @@
+// SubRip (.srt) files: numbered blocks of a timing line
+// "00:01:02,345 --> 00:01:04,000" and one or more text lines, separated by
+// blank lines. Times are kept as whole milliseconds.
+//
+// Reading is forgiving, as players are: '.' or ',' before the milliseconds,
+// hours left out, text after the end time (positions, ignored), missing or
+// extra blank lines, missing numbers, a byte-order mark, CR LF endings.
+// Writing is strict: numbered from 1, "HH:MM:SS,mmm", a blank line after
+// each cue, and the line endings the file came with.
+//
+// Author: Alexius Academia
+// Date: 2026-11-23
+
+struct Cue {
+    start: Int
+    end: Int
+    text: String
+}
+
+struct SrtFile {
+    cues: [Cue] = []
+    // Lines that weren't part of a cue, for the user to know about.
+    warnings: [String] = []
+    // "\r\n" when the file had Windows line endings.
+    newline: String = "\n"
+}
+
+fn pad(_ n: Int, _ width: Int) -> String {
+    var s = "{n}"
+    while s.count < width {
+        s = "0" + s
+    }
+    s
+}
+
+// "01:02:03,456" for 3_723_456 ms. Negative times are written as 0, which
+// is what an SRT file can hold.
+fn formatTime(_ ms: Int) -> String {
+    let t = if ms < 0 { 0 } else { ms }
+    let h = t / 3_600_000
+    let m = (t / 60_000) % 60
+    let s = (t / 1000) % 60
+    "{pad(h, 2)}:{pad(m, 2)}:{pad(s, 2)},{pad(t % 1000, 3)}"
+}
+
+// A signed duration for showing an offset: "+00:00:01,500", "-00:01:00,000".
+fn formatOffset(_ ms: Int) -> String {
+    if ms < 0 { "-" + formatTime(-ms) } else { "+" + formatTime(ms) }
+}
+
+fn isDigits(_ s: String) -> Bool {
+    if s.isEmpty {
+        return false
+    }
+    for c in s.characters {
+        if c < "0" || c > "9" {
+            return false
+        }
+    }
+    true
+}
+
+// Milliseconds from "HH:MM:SS,mmm", "MM:SS,mmm", "SS,mmm", with '.' or ','
+// and any number of fraction digits; nil if it isn't a time.
+fn parseTime(_ text: String) -> Int? {
+    let t = text.trim().replace(".", with: ",")
+    if t.isEmpty {
+        return nil
+    }
+    var whole = t
+    var frac = ""
+    if let comma = t.find(",") {
+        whole = t.substring(from: 0, to: comma)
+        frac = t.substring(from: comma + 1, to: t.count)
+        if !isDigits(frac) {
+            return nil
+        }
+    }
+    let parts = whole.split(":")
+    if parts.count > 3 {
+        return nil
+    }
+    var seconds = 0
+    for p in parts {
+        if !isDigits(p) {
+            return nil
+        }
+        seconds = seconds * 60 + (Int(p) ?? 0)
+    }
+    // The fraction as milliseconds: "5" is 500, "45" 450, "4567" 456.
+    var ms = 0
+    var scale = 100
+    for c in frac.characters {
+        ms += (Int(c) ?? 0) * scale
+        scale = scale / 10
+    }
+    seconds * 1000 + ms
+}
+
+// A signed amount of time typed by the user: "+1.5", "-0.25", "2" (seconds),
+// "-00:00:01,500", "+1:30" (a time). nil if it isn't one.
+fn parseOffset(_ text: String) -> Int? {
+    var t = text.trim()
+    var sign = 1
+    if t.hasPrefix("-") || t.hasPrefix("−") {
+        sign = -1
+        t = t.substring(from: 1, to: t.count).trim()
+    } else if t.hasPrefix("+") {
+        t = t.substring(from: 1, to: t.count).trim()
+    }
+    if t.hasSuffix("ms") {
+        let n = t.substring(from: 0, to: t.count - 2).trim()
+        if !isDigits(n) {
+            return nil
+        }
+        return sign * (Int(n) ?? 0)
+    }
+    if t.hasSuffix("s") {
+        t = t.substring(from: 0, to: t.count - 1).trim()
+    }
+    if let ms = parseTime(t) {
+        return sign * ms
+    }
+    nil
+}
+
+// The start and end of a timing line, or nil.
+fn parseTiming(_ line: String) -> (Int, Int)? {
+    let arrow = line.find("-->") ?? -1
+    if arrow < 0 {
+        return nil
+    }
+    let left = line.substring(from: 0, to: arrow).trim()
+    let words = line.substring(from: arrow + 3, to: line.count).words()
+    if words.isEmpty {
+        return nil
+    }
+    if let s = parseTime(left) {
+        if let e = parseTime(words[0]) {
+            return (s, e)
+        }
+    }
+    nil
+}
+
+fn isIndexLine(_ line: String) -> Bool {
+    isDigits(line.trim())
+}
+
+fn parseSrt(_ source: String) -> SrtFile {
+    var file = SrtFile()
+    var text = source
+    // A UTF-8 byte-order mark (U+FEFF, written literally between the quotes).
+    if text.hasPrefix("﻿") {
+        text = text.substring(from: 1, to: text.count)
+    }
+    if text.contains("\r\n") {
+        file.newline = "\r\n"
+    }
+    let lines = text.replace("\r\n", with: "\n").replace("\r", with: "\n").split("\n")
+    let n = lines.count
+    var i = 0
+    while i < n {
+        let timing = parseTiming(lines[i])
+        if timing == nil {
+            let t = lines[i].trim()
+            if !t.isEmpty && !isIndexLine(t) {
+                file.warnings.append("Line {i + 1} is outside a cue: {t}")
+            }
+            i += 1
+            continue
+        }
+        let (start, end) = timing ?? (0, 0)
+        var body: [String] = []
+        var j = i + 1
+        while j < n {
+            let line = lines[j]
+            if parseTiming(line) != nil {
+                break
+            }
+            if line.trim().isEmpty {
+                // A blank line ends the cue when the next cue (or the end
+                // of the file) follows; one inside the text is kept.
+                var k = j
+                while k < n && lines[k].trim().isEmpty {
+                    k += 1
+                }
+                if k >= n || parseTiming(lines[k]) != nil || (k + 1 < n && isIndexLine(lines[k]) && parseTiming(lines[k + 1]) != nil) {
+                    j = k
+                    break
+                }
+                body.append("")
+                j += 1
+                continue
+            }
+            // A number right before a timing line is the next cue's.
+            if isIndexLine(line) && j + 1 < n && parseTiming(lines[j + 1]) != nil {
+                break
+            }
+            body.append(line)
+            j += 1
+        }
+        while !body.isEmpty && body[body.count - 1].trim().isEmpty {
+            body.removeLast()
+        }
+        file.cues.append(Cue(start: start, end: end, text: body.joined(separator: "\n")))
+        i = j
+    }
+    file
+}
+
+fn formatSrt(_ cues: [Cue], newline: String = "\n") -> String {
+    var out: [String] = []
+    var number = 1
+    for cue in cues {
+        out.append("{number}")
+        out.append("{formatTime(cue.start)} --> {formatTime(cue.end)}")
+        for line in cue.text.replace("\r\n", with: "\n").split("\n") {
+            out.append(line)
+        }
+        out.append("")
+        number += 1
+    }
+    if out.isEmpty { "" } else { out.joined(separator: newline) + newline }
+}
+
+// The cues in order of their start (stable: equal starts keep their order).
+fn sortedCues(_ cues: [Cue]) -> [Cue] {
+    var order: [Int] = []
+    for i in 0..cues.count {
+        order.append(i)
+    }
+    order = order.sorted { a, b in
+        if cues[a].start != cues[b].start { cues[a].start < cues[b].start } else { a < b }
+    }
+    var out: [Cue] = []
+    for i in order {
+        out.append(cues[i])
+    }
+    out
+}
