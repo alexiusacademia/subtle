@@ -1,1 +1,36 @@
-{}
+{
+  "macos": {
+    "version": "0.1.0",
+    "url": "https://storage.googleapis.com/subtle-downloads/updates/0.1.0/Subtle-0.1.0.dmg",
+    "sha256": "554282b968de7c858d0770cc768397efa13f8b720b30e95ba9bb79854b125399",
+    "size": 6571694,
+    "notes": ""
+  },
+  "windows": {
+    "version": "0.1.0",
+    "url": "https://storage.googleapis.com/subtle-downloads/updates/0.1.0/Subtle-0.1.0-setup.exe",
+    "sha256": "4be9f09fa7ff59289e0c95d68e81524caefb5dd4d76812d2d80dcab4c6c9d4d0",
+    "size": 7132160,
+    "notes": ""
+  },
+  "linux": {
+    "version": "0.1.0",
+    "url": "https://storage.googleapis.com/subtle-downloads/updates/0.1.0/Subtle-0.1.0-x86_64.AppImage",
+    "sha256": "ace45a3896084eaf3732d481efd51b5a0bfa968e71ef0ec67e6eb611f196bff6",
+    "size": 11917816,
+    "notes": "",
+    "deb": "https://storage.googleapis.com/subtle-downloads/updates/0.1.0/subtle_0.1.0_amd64.deb",
+    "deb_sha256": "512879f23bfb844b4866b7e1fd9a2c6e7b40680574d01dd46639042f4c2bcbce",
+    "deb_size": 10860910
+  },
+  "linux_arm64": {
+    "version": "0.1.0",
+    "url": "https://storage.googleapis.com/subtle-downloads/updates/0.1.0/Subtle-0.1.0-aarch64.AppImage",
+    "sha256": "9e11fcfadc380bc7a548548e0a97f65e13e1e77a106a127d2ef5acd64262c786",
+    "size": 11340296,
+    "notes": "",
+    "deb": "https://storage.googleapis.com/subtle-downloads/updates/0.1.0/subtle_0.1.0_arm64.deb",
+    "deb_sha256": "4137240f8b3ab7c51823558fe36a6fca39f871151b8d8d766f59b8372d375c73",
+    "deb_size": 10287256
+  }
+}
