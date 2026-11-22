@@ -5,7 +5,7 @@
   release feed tools/publish.sh writes.
 
   Author: Alexius Academia
-  Date: 2026-11-23
+  Date: 2026-11-23 (download counting: 2026-11-23)
 -->
 <html lang="en">
 <head>
@@ -268,6 +268,20 @@
       .then(r => r.ok ? r.json() : {})
       .then(render)
       .catch(() => {})
+
+    // Counts a download: pressing a link to a download tells the statistics
+    // service which product, version and system, and nothing about the
+    // visitor (see the privacy page).
+    document.addEventListener('click', (event) => {
+      const link = event.target.closest ? event.target.closest('a[href]') : null
+      if (!link) return
+      const found = /storage\.googleapis\.com\/subtle-downloads\/(?:.*\/)?v?(\d+(?:\.\d+)+)\/[^/]+\.(dmg|exe|AppImage|deb)$/.exec(link.href)
+      if (!found) return
+      const system = found[2] === 'exe' ? 'windows' : /AppImage|deb/.test(found[2]) ? 'linux' : 'macos'
+      const ping = 'https://stats.syncster.dev/v1/ping?app=subtle&type=download&v=' + found[1] + '&os=' + system
+      if (navigator.sendBeacon) navigator.sendBeacon(ping)
+      else new Image().src = ping
+    })
   </script>
 </body>
 </html>

@@ -30,7 +30,10 @@
         <h2>On your computer</h2>
         <p>Subtle keeps the words you add to its dictionary and the speech models you download in its own folder (on macOS, <code>~/Library/Application Support/Subtle</code>), and short-lived sound files while a video plays or is transcribed.</p>
         <h2>This website</h2>
-        <p>The site has no cookies and no trackers. The downloads come from Google Cloud Storage, which, like any web server, sees the address that asks for a file.</p>
+        <p>The site has no cookies and no trackers.</p>
+        <h2>The download count</h2>
+        <p>When you press a download link, the page tells <code>stats.syncster.dev</code>, a service we run, that Subtle was downloaded: the version and the system (macOS, Windows or Linux), and nothing else. No cookie, no identifier, nothing about you. The service looks up the country of the address the request comes from, then drops the address; it isn't stored.</p>
+        <p>The downloads themselves come from Google Cloud Storage, whose access logs (the file, the time and a hashed address, compared only within a day) are counted the same way.</p>
         <h2>Questions</h2>
         <p>Write to <a href="mailto:admin@syncster.dev">admin@syncster.dev</a>.</p>
       </div>

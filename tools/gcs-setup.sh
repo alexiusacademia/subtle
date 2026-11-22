@@ -25,4 +25,6 @@ fi
 echo "→ letting everyone read it"
 gcloud storage buckets add-iam-policy-binding "gs://$SUBTLE_GCS_BUCKET" \
     --member=allUsers --role=roles/storage.objectViewer > /dev/null
+echo "→ counting its downloads (usage logs for stats.syncster.dev, prefix subtle)"
+gcloud storage buckets update "gs://$SUBTLE_GCS_BUCKET" --log-bucket=syncster-usage-logs --log-object-prefix=subtle > /dev/null
 echo "→ done: $SUBTLE_PUBLIC_BASE"
